@@ -52,7 +52,8 @@ async def vercel_cron():
 
     # 2. Process Early Access Graduations (After 3 Days)
     expired_media = await db.get_expired_early_access_media(current_time, 3)
-    target_channel = -1002684551966
+    from bot.config import Config
+    target_channel = Config.GRADUATION_CHANNEL_ID
     for media in expired_media:
         try:
             await bot.copy_message(

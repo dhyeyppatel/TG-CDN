@@ -183,6 +183,10 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if not message:
         return
         
+    # Ignore posts in the graduation channel (do not add them to the Default Pool)
+    if message.chat.id == Config.GRADUATION_CHANNEL_ID:
+        return
+        
     # Any post in any channel dynamically registers/updates its last_message_id
     await db.update_channel(message.chat.id, message.chat.title, message.message_id)
     logger.info(f"Updated LAST_MESSAGE_ID to {message.message_id} for channel {message.chat.id}")
