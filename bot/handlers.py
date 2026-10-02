@@ -141,7 +141,7 @@ async def toggle_autosend(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 0. Handle Admin States
-    if Config.ADMIN_ID and update.effective_user.id == Config.ADMIN_ID:
+    if Config.OWNER_ID and update.effective_user.id == Config.OWNER_ID:
         state = await db.get_setting("admin_state", None)
         if state and update.message and update.message.text:
             text = update.message.text
@@ -161,7 +161,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 1. Handle Channel Forwarding initialization (Admin Only)
     if update.message and update.message.forward_origin and update.message.forward_origin.type == "channel":
-        if Config.ADMIN_ID and update.effective_user.id == Config.ADMIN_ID:
+        if Config.OWNER_ID and update.effective_user.id == Config.OWNER_ID:
             chat_id = update.message.forward_origin.chat.id
             title = update.message.forward_origin.chat.title
             msg_id = update.message.forward_origin.message_id
@@ -305,7 +305,7 @@ async def render_menu_toggles(query):
     await query.edit_message_text("⚙️ *Toggles*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if Config.ADMIN_ID and update.effective_user.id != Config.ADMIN_ID:
+    if Config.OWNER_ID and update.effective_user.id != Config.OWNER_ID:
         await update.message.reply_text("You are not authorized to use this command.")
         return
         
@@ -313,7 +313,7 @@ async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if Config.ADMIN_ID and query.from_user.id != Config.ADMIN_ID:
+    if Config.OWNER_ID and query.from_user.id != Config.OWNER_ID:
         await query.answer("Unauthorized.", show_alert=True)
         return
         

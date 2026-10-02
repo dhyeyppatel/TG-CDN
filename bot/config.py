@@ -7,4 +7,4 @@ class Config:
     BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
     MONGODB_URI = os.environ.get("MONGODB_URI", "")
     DATABASE_NAME = os.environ.get("DATABASE_NAME", "media_bot_db")
-    ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
+    OWNER_ID = int(os.environ.get("OWNER_ID", 0))
