@@ -23,11 +23,12 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 async def check_fsub(bot, user_id):
     fsub_enabled = await db.get_setting("fsub_enabled", False)
-    if not fsub_enabled or not Config.FSUB_CHANNEL_ID:
+    fsub_channel_id = await db.get_setting("fsub_channel_id", "")
+    if not fsub_enabled or not fsub_channel_id:
         return True
         
     try:
-        member = await bot.get_chat_member(chat_id=Config.FSUB_CHANNEL_ID, user_id=user_id)
+        member = await bot.get_chat_member(chat_id=fsub_channel_id, user_id=user_id)
         if member.status in ["left", "kicked"]:
             return False
         return True
@@ -139,6 +140,25 @@ async def toggle_autosend(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🛑 Auto-send stopped.")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 0. Handle Admin States
+    if Config.ADMIN_ID and update.effective_user.id == Config.ADMIN_ID:
+        state = await db.get_setting("admin_state", None)
+        if state and update.message and update.message.text:
+            text = update.message.text
+            if state == "wait_fsub_link":
+                await db.set_setting("fsub_channel_link", text)
+                await db.set_setting("admin_state", None)
+                await update.message.reply_text(f"✅ FSUB Link updated to: {text}\nSend /settings to view changes.")
+                return
+            elif state == "wait_grad_days":
+                if text.isdigit():
+                    await db.set_setting("graduation_days", int(text))
+                    await db.set_setting("admin_state", None)
+                    await update.message.reply_text(f"✅ Graduation time updated to {text} days.\nSend /settings to view changes.")
+                else:
+                    await update.message.reply_text("❌ Please send a valid number.")
+                return
+
     # 1. Handle Channel Forwarding initialization (Admin Only)
     if update.message and update.message.forward_origin and update.message.forward_origin.type == "channel":
         if Config.ADMIN_ID and update.effective_user.id == Config.ADMIN_ID:
@@ -148,7 +168,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             keyboard = [
                 [InlineKeyboardButton("Add as Storage Channel", callback_data=f"fw_store_{chat_id}_{msg_id}")],
-                [InlineKeyboardButton("Set as Early Access Chat", callback_data=f"fw_early_{chat_id}")]
+                [InlineKeyboardButton("Set Early Access Chat", callback_data=f"fw_early_{chat_id}")],
+                [InlineKeyboardButton("Set Graduation Channel", callback_data=f"fw_grad_{chat_id}")],
+                [InlineKeyboardButton("Set FSUB Channel", callback_data=f"fw_fsub_{chat_id}")]
             ]
             await update.message.reply_text(
                 f"You forwarded a message from **{title}**.\nWhat do you want to do with this chat?",
@@ -163,8 +185,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text in ["Next", "⏱ Toggle Auto-Send"]:
             # Check Force Sub
             if not await check_fsub(context.bot, update.effective_user.id):
-                keyboard = [[InlineKeyboardButton("Join Channel 📢", url=Config.FSUB_CHANNEL_LINK)]]
-                await update.message.reply_text("⚠️ You must join our channel to use this bot!", reply_markup=InlineKeyboardMarkup(keyboard))
+                fsub_link = await db.get_setting("fsub_channel_link", "")
+                keyboard = [[InlineKeyboardButton("Join Channel 📢", url=fsub_link)]] if fsub_link else []
+                await update.message.reply_text("⚠️ You must join our channel to use this bot!", reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None)
                 return
                 
             # Check Cooldown
@@ -184,7 +207,8 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
         
     # Ignore posts in the graduation channel (do not add them to the Default Pool)
-    if message.chat.id == Config.GRADUATION_CHANNEL_ID:
+    grad_id = await db.get_setting("graduation_channel_id", "")
+    if grad_id and message.chat.id == int(grad_id):
         return
         
     # Any post in any channel dynamically registers/updates its last_message_id
@@ -226,53 +250,66 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
             logger.info(f"Bot removed from channel: {result.chat.id}, deleted from database.")
 
 async def render_settings_main(query):
-    fsub = await db.get_setting("fsub_enabled", False)
-    fsub_text = "🟢 ON" if fsub else "🔴 OFF"
-    
-    mode = await db.get_setting("bot_mode", "default")
-    mode_text = "🟠 Early Access Mode" if mode == "early_access" else "🟢 Default Mode"
-    
     keyboard = [
-        [InlineKeyboardButton("📊 View Tracked Channels", callback_data="settings_channels")],
-        [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")],
-        [InlineKeyboardButton("⏱ Config Auto-Delete Time", callback_data="settings_autodelete")],
-        [InlineKeyboardButton("⏳ Config Auto-Send Expiry", callback_data="settings_autoexpire")],
-        [InlineKeyboardButton(f"📢 Force Sub: {fsub_text}", callback_data="toggle_fsub")],
-        [InlineKeyboardButton(f"Mode: {mode_text}", callback_data="toggle_mode")]
+        [InlineKeyboardButton("⚙️ Channels Setup", callback_data="menu_channels")],
+        [InlineKeyboardButton("⚙️ Timers & Limits", callback_data="menu_timers")],
+        [InlineKeyboardButton("⚙️ Toggles", callback_data="menu_toggles")],
+        [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(
-        "⚙️ *Bot Settings & Admin Panel*\nSelect an option below:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
+    
+    text = "⚙️ *Bot Settings & Admin Panel*\nSelect a category below:"
+    
+    if hasattr(query, 'edit_message_text'):
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    else:
+        await query.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+async def render_menu_channels(query):
+    fsub_id = await db.get_setting("fsub_channel_id", "Not Set")
+    early_id = await db.get_setting("early_access_chat", "Not Set")
+    grad_id = await db.get_setting("graduation_channel_id", "Not Set")
+    
+    keyboard = [
+        [InlineKeyboardButton("📊 Storage Channels", callback_data="settings_channels")],
+        [InlineKeyboardButton(f"FSUB Ch: {fsub_id}", callback_data="prompt_fw"), InlineKeyboardButton("❌", callback_data="rm_fsub_id")],
+        [InlineKeyboardButton("Set FSUB Link", callback_data="prompt_fsub_link")],
+        [InlineKeyboardButton(f"Early Access: {early_id}", callback_data="prompt_fw"), InlineKeyboardButton("❌", callback_data="rm_early")],
+        [InlineKeyboardButton(f"Graduation: {grad_id}", callback_data="prompt_fw"), InlineKeyboardButton("❌", callback_data="rm_grad")],
+        [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
+    ]
+    await query.edit_message_text("⚙️ *Channels Setup*\n\n_To set a channel, forward a message from it to the bot, and select what type of channel it is. Or click buttons to remove them._", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def render_menu_timers(query):
+    del_mins = await db.get_setting("autodelete_minutes", 5)
+    exp_mins = await db.get_setting("autosend_expire_minutes", 60)
+    grad_days = await db.get_setting("graduation_days", 3)
+    
+    keyboard = [
+        [InlineKeyboardButton(f"Auto-Delete: {del_mins}m", callback_data="settings_autodelete")],
+        [InlineKeyboardButton(f"Auto-Send Expiry: {exp_mins}m", callback_data="settings_autoexpire")],
+        [InlineKeyboardButton(f"Graduation Time: {grad_days} Days", callback_data="prompt_grad_days")],
+        [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
+    ]
+    await query.edit_message_text("⚙️ *Timers & Limits*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def render_menu_toggles(query):
+    fsub = await db.get_setting("fsub_enabled", False)
+    mode = await db.get_setting("bot_mode", "default")
+    
+    keyboard = [
+        [InlineKeyboardButton(f"Force Sub: {'🟢 ON' if fsub else '🔴 OFF'}", callback_data="toggle_fsub")],
+        [InlineKeyboardButton(f"Mode: {'🟠 Early Access' if mode == 'early_access' else '🟢 Default'}", callback_data="toggle_mode")],
+        [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
+    ]
+    await query.edit_message_text("⚙️ *Toggles*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if Config.ADMIN_ID and update.effective_user.id != Config.ADMIN_ID:
         await update.message.reply_text("You are not authorized to use this command.")
         return
         
-    fsub = await db.get_setting("fsub_enabled", False)
-    fsub_text = "🟢 ON" if fsub else "🔴 OFF"
-    
-    mode = await db.get_setting("bot_mode", "default")
-    mode_text = "🟠 Early Access Mode" if mode == "early_access" else "🟢 Default Mode"
-    
-    keyboard = [
-        [InlineKeyboardButton("📊 View Tracked Channels", callback_data="settings_channels")],
-        [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")],
-        [InlineKeyboardButton("⏱ Config Auto-Delete Time", callback_data="settings_autodelete")],
-        [InlineKeyboardButton("⏳ Config Auto-Send Expiry", callback_data="settings_autoexpire")],
-        [InlineKeyboardButton(f"📢 Force Sub: {fsub_text}", callback_data="toggle_fsub")],
-        [InlineKeyboardButton(f"Mode: {mode_text}", callback_data="toggle_mode")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "⚙️ *Bot Settings & Admin Panel*\nSelect an option below:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
+    await render_settings_main(update)
 
 async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -284,19 +321,25 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if query.data == "settings_main":
         await render_settings_main(query)
+    elif query.data == "menu_channels":
+        await render_menu_channels(query)
+    elif query.data == "menu_timers":
+        await render_menu_timers(query)
+    elif query.data == "menu_toggles":
+        await render_menu_toggles(query)
         
     elif query.data == "toggle_fsub":
         fsub = await db.get_setting("fsub_enabled", False)
         await db.set_setting("fsub_enabled", not fsub)
         await query.answer("Force sub toggled!", show_alert=False)
-        await render_settings_main(query)
+        await render_menu_toggles(query)
         
     elif query.data == "toggle_mode":
         mode = await db.get_setting("bot_mode", "default")
         new_mode = "early_access" if mode == "default" else "default"
         await db.set_setting("bot_mode", new_mode)
         await query.answer(f"Mode changed to {new_mode.replace('_', ' ').title()}!", show_alert=False)
-        await render_settings_main(query)
+        await render_menu_toggles(query)
         
     elif query.data.startswith("fw_store_"):
         parts = query.data.split("_")
@@ -308,6 +351,42 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = int(query.data.split("_")[2])
         await db.set_setting("early_access_chat", chat_id)
         await query.edit_message_text(f"✅ Early Access Chat has been set to ID: {chat_id}")
+
+    elif query.data.startswith("fw_grad_"):
+        chat_id = int(query.data.split("_")[2])
+        await db.set_setting("graduation_channel_id", chat_id)
+        await query.edit_message_text(f"✅ Graduation Channel has been set to ID: {chat_id}")
+
+    elif query.data.startswith("fw_fsub_"):
+        chat_id = int(query.data.split("_")[2])
+        await db.set_setting("fsub_channel_id", chat_id)
+        await query.edit_message_text(f"✅ FSUB Channel has been set to ID: {chat_id}")
+
+    elif query.data == "prompt_fw":
+        await query.answer("Please forward a message from the channel to the bot to set it.", show_alert=True)
+        
+    elif query.data == "prompt_fsub_link":
+        await db.set_setting("admin_state", "wait_fsub_link")
+        await query.edit_message_text("🔗 Send me the new FSUB channel link (e.g., https://t.me/joinchat/...)")
+        
+    elif query.data == "prompt_grad_days":
+        await db.set_setting("admin_state", "wait_grad_days")
+        await query.edit_message_text("📅 Send me the new Graduation Time in days (e.g., 3)")
+        
+    elif query.data == "rm_fsub_id":
+        await db.set_setting("fsub_channel_id", "")
+        await query.answer("FSUB Channel cleared!", show_alert=False)
+        await render_menu_channels(query)
+        
+    elif query.data == "rm_early":
+        await db.set_setting("early_access_chat", "")
+        await query.answer("Early Access Chat cleared!", show_alert=False)
+        await render_menu_channels(query)
+        
+    elif query.data == "rm_grad":
+        await db.set_setting("graduation_channel_id", "")
+        await query.answer("Graduation Channel cleared!", show_alert=False)
+        await render_menu_channels(query)
         
     elif query.data == "settings_channels":
         channels = await db.get_all_channels()
@@ -321,7 +400,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text += f"   ID: `{c['chat_id']}`\n"
                 text += f"   Last Message ID: {c['last_message_id']}\n\n"
                 
-        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="settings_main")]]
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="menu_channels")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
         
@@ -355,7 +434,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
              InlineKeyboardButton("15 Mins", callback_data="set_del_15")],
             [InlineKeyboardButton("30 Mins", callback_data="set_del_30"),
              InlineKeyboardButton("60 Mins", callback_data="set_del_60")],
-            [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
+            [InlineKeyboardButton("🔙 Back", callback_data="menu_timers")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
@@ -376,7 +455,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("1 Hour", callback_data="set_exp_60"),
              InlineKeyboardButton("3 Hours", callback_data="set_exp_180"),
              InlineKeyboardButton("12 Hours", callback_data="set_exp_720")],
-            [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
+            [InlineKeyboardButton("🔙 Back", callback_data="menu_timers")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
