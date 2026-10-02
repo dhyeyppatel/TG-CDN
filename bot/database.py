@@ -109,4 +109,17 @@ class Database:
     async def remove_deletion(self, doc_id):
         await self.db.pending_deletions.delete_one({"_id": doc_id})
 
+    async def add_to_media_group(self, chat_id, media_group_id, message_id):
+        await self.db.media_groups.update_one(
+            {"chat_id": chat_id, "media_group_id": media_group_id},
+            {"$addToSet": {"message_ids": message_id}},
+            upsert=True
+        )
+
+    async def get_media_group_by_message_id(self, chat_id, message_id):
+        return await self.db.media_groups.find_one({
+            "chat_id": chat_id,
+            "message_ids": message_id
+        })
+
 db = Database(Config.MONGODB_URI, Config.DATABASE_NAME)

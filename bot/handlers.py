@@ -50,24 +50,47 @@ async def core_send_media(bot, chat_id):
         random_id = random.randint(1, last_message_id)
         
         try:
-            sent_message = await bot.copy_message(
-                chat_id=chat_id,
-                from_chat_id=c_id,
-                message_id=random_id,
-                reply_markup=None
-            )
+            media_group = await db.get_media_group_by_message_id(c_id, random_id)
             
-            warning_msg = await bot.send_message(
-                chat_id=chat_id, 
-                text=f"⏳ _This file will be automatically deleted in {autodelete_mins} minutes._",
-                parse_mode="Markdown"
-            )
-            
-            # Schedule DB auto-delete
-            delete_at = int(time.time()) + autodelete_secs
-            await db.schedule_deletion(chat_id, sent_message.message_id, delete_at)
-            await db.schedule_deletion(chat_id, warning_msg.message_id, delete_at)
-            return True, None
+            if media_group and len(media_group.get("message_ids", [])) > 1:
+                # Copy the entire media group
+                sent_messages = await bot.copy_messages(
+                    chat_id=chat_id,
+                    from_chat_id=c_id,
+                    message_ids=media_group["message_ids"]
+                )
+                
+                warning_msg = await bot.send_message(
+                    chat_id=chat_id, 
+                    text=f"⏳ _This media group will be automatically deleted in {autodelete_mins} minutes._",
+                    parse_mode="Markdown"
+                )
+                
+                delete_at = int(time.time()) + autodelete_secs
+                for sm in sent_messages:
+                    await db.schedule_deletion(chat_id, sm.message_id, delete_at)
+                await db.schedule_deletion(chat_id, warning_msg.message_id, delete_at)
+                return True, None
+            else:
+                # Normal single message copy
+                sent_message = await bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=c_id,
+                    message_id=random_id,
+                    reply_markup=None
+                )
+                
+                warning_msg = await bot.send_message(
+                    chat_id=chat_id, 
+                    text=f"⏳ _This file will be automatically deleted in {autodelete_mins} minutes._",
+                    parse_mode="Markdown"
+                )
+                
+                # Schedule DB auto-delete
+                delete_at = int(time.time()) + autodelete_secs
+                await db.schedule_deletion(chat_id, sent_message.message_id, delete_at)
+                await db.schedule_deletion(chat_id, warning_msg.message_id, delete_at)
+                return True, None
         except BadRequest:
             continue
         except Exception:
@@ -213,6 +236,10 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         
     # Any post in any channel dynamically registers/updates its last_message_id
     await db.update_channel(message.chat.id, message.chat.title, message.message_id)
+    
+    if message.media_group_id:
+        await db.add_to_media_group(message.chat.id, message.media_group_id, message.message_id)
+        
     logger.info(f"Updated LAST_MESSAGE_ID to {message.message_id} for channel {message.chat.id}")
 
 async def reaction_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
