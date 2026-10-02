@@ -1,4 +1,5 @@
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ChatMemberHandler, CallbackQueryHandler, MessageReactionHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ChatMemberHandler, CallbackQueryHandler, MessageReactionHandler, TypeHandler
+from telegram import Update
 from bot.config import Config
 from bot.handlers import start_handler, channel_post_handler, message_handler, my_chat_member_handler, settings_handler, settings_callback, toggle_autosend, reaction_handler
 import logging
@@ -21,8 +22,8 @@ def create_app():
     # Listen for button presses in PM
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
-    # Listen for new reactions in Early Access Chat
-    app.add_handler(MessageReactionHandler(reaction_handler))
+    # Listen for new reactions in Early Access Chat (Works for both Private and Channels)
+    app.add_handler(TypeHandler(Update, reaction_handler))
     
     # Listen for new memes in ALL channels to dynamically update LAST_MESSAGE_ID
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, channel_post_handler))

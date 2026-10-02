@@ -29,7 +29,7 @@ async def set_webhook(url: str):
     webhook_url = f"{url.rstrip('/')}/api/webhook"
     await tg_app.bot.set_webhook(
         url=webhook_url,
-        allowed_updates=["message", "callback_query", "channel_post", "my_chat_member", "message_reaction"]
+        allowed_updates=["message", "callback_query", "channel_post", "my_chat_member", "message_reaction", "message_reaction_count"]
     )
     return {"status": "Webhook set successfully", "url": webhook_url}
 

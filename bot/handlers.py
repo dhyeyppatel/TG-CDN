@@ -12,13 +12,13 @@ logger = logging.getLogger(__name__)
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = ReplyKeyboardMarkup(
         [
-            [KeyboardButton("🎲 Random Media")],
+            [KeyboardButton("Next")],
             [KeyboardButton("⏱ Toggle Auto-Send")]
         ],
         resize_keyboard=True
     )
     await update.message.reply_text(
-        "Welcome!\n\nClick a button below to get a random media post or start auto-sending.",
+        "Welcome!\n\nClick a button below to get a media post or start auto-sending.",
         reply_markup=reply_markup
     )
 async def check_fsub(bot, user_id):
@@ -160,7 +160,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. Handle standard text buttons
     if update.message and update.message.text:
         text = update.message.text
-        if text in ["🎲 Random Media", "⏱ Toggle Auto-Send"]:
+        if text in ["Next", "⏱ Toggle Auto-Send"]:
             # Check Force Sub
             if not await check_fsub(context.bot, update.effective_user.id):
                 keyboard = [[InlineKeyboardButton("Join Channel 📢", url=Config.FSUB_CHANNEL_LINK)]]
@@ -173,7 +173,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"⏳ Please wait {wait_time}s before requesting again.")
                 return
                 
-        if text == "🎲 Random Media":
+        if text == "Next":
             await send_random_media(update, context)
         elif text == "⏱ Toggle Auto-Send":
             await toggle_autosend(update, context)
@@ -188,22 +188,27 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     logger.info(f"Updated LAST_MESSAGE_ID to {message.message_id} for channel {message.chat.id}")
 
 async def reaction_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reaction = update.message_reaction
-    if not reaction:
+    if update.message_reaction:
+        chat_id = update.message_reaction.chat.id
+        msg_id = update.message_reaction.message_id
+        is_add = bool(update.message_reaction.new_reaction)
+    elif update.message_reaction_count:
+        chat_id = update.message_reaction_count.chat.id
+        msg_id = update.message_reaction_count.message_id
+        is_add = bool(update.message_reaction_count.reactions)
+    else:
         return
         
-    chat_id = reaction.chat.id
     early_chat = await db.get_setting("early_access_chat", None)
     
     # If the reaction happened in the Early Access chat
     if early_chat and chat_id == int(early_chat):
-        # Check if the reaction has new additions
-        if reaction.new_reaction:
-            await db.add_early_access_media(chat_id, reaction.message_id)
-            logger.info(f"Added message {reaction.message_id} to Early Access Media")
-        elif not reaction.new_reaction and reaction.old_reaction:
-            await db.remove_early_access_media(chat_id, reaction.message_id)
-            logger.info(f"Removed message {reaction.message_id} from Early Access Media due to unreact")
+        if is_add:
+            await db.add_early_access_media(chat_id, msg_id)
+            logger.info(f"Added message {msg_id} to Early Access Media")
+        else:
+            await db.remove_early_access_media(chat_id, msg_id)
+            logger.info(f"Removed message {msg_id} from Early Access Media due to unreact")
 
 async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # This fires when the bot is added or removed from a chat
