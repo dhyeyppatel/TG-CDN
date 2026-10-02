@@ -27,6 +27,9 @@ async def core_send_media(bot, chat_id):
     if not channels:
         return False, "No storage channels found yet! Forward a message from your channel to me to register it."
 
+    autodelete_mins = await db.get_setting("autodelete_minutes", 5)
+    autodelete_secs = autodelete_mins * 60
+
     for attempt in range(10):
         chosen_channel = random.choice(channels)
         c_id = chosen_channel["chat_id"]
@@ -40,8 +43,17 @@ async def core_send_media(bot, chat_id):
                 message_id=random_id,
                 reply_markup=None
             )
-            # Schedule DB auto-delete in 5 minutes (300 seconds)
-            await db.schedule_deletion(chat_id, sent_message.message_id, int(time.time()) + 300)
+            
+            warning_msg = await bot.send_message(
+                chat_id=chat_id, 
+                text=f"⏳ _This file will be automatically deleted in {autodelete_mins} minutes._",
+                parse_mode="Markdown"
+            )
+            
+            # Schedule DB auto-delete
+            delete_at = int(time.time()) + autodelete_secs
+            await db.schedule_deletion(chat_id, sent_message.message_id, delete_at)
+            await db.schedule_deletion(chat_id, warning_msg.message_id, delete_at)
             return True, None
         except BadRequest:
             continue
@@ -60,7 +72,8 @@ async def toggle_autosend(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_subscribed = await db.toggle_subscriber(chat_id)
     
     if is_subscribed:
-        await update.message.reply_text("✅ Auto-send started! You will receive random media every 5 minutes. (They will auto-delete 5 mins after arriving).")
+        mins = await db.get_setting("autodelete_minutes", 5)
+        await update.message.reply_text(f"✅ Auto-send started! You will receive random media every 5 minutes. (They will auto-delete {mins} mins after arriving).")
     else:
         await update.message.reply_text("🛑 Auto-send stopped.")
 
@@ -111,7 +124,8 @@ async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     keyboard = [
         [InlineKeyboardButton("📊 View Tracked Channels", callback_data="settings_channels")],
-        [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")]
+        [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")],
+        [InlineKeyboardButton("⏱ Config Auto-Delete Time", callback_data="settings_autodelete")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -132,7 +146,8 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "settings_main":
         keyboard = [
             [InlineKeyboardButton("📊 View Tracked Channels", callback_data="settings_channels")],
-            [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")]
+            [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")],
+            [InlineKeyboardButton("⏱ Config Auto-Delete Time", callback_data="settings_autodelete")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
@@ -169,5 +184,25 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "_(Note: This includes deleted messages and gaps)_"
         )
         keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="settings_main")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+    elif query.data == "settings_autodelete" or query.data.startswith("set_del_"):
+        if query.data.startswith("set_del_"):
+            mins = int(query.data.split("_")[2])
+            await db.set_setting("autodelete_minutes", mins)
+            await query.answer(f"Auto-delete time set to {mins} minutes!", show_alert=False)
+            
+        current_time = await db.get_setting("autodelete_minutes", 5)
+        text = f"⏱ *Auto-Delete Configuration*\n\nCurrent time: **{current_time} minutes**\n\nSelect a new duration:"
+        
+        keyboard = [
+            [InlineKeyboardButton("1 Min", callback_data="set_del_1"),
+             InlineKeyboardButton("5 Mins", callback_data="set_del_5"),
+             InlineKeyboardButton("15 Mins", callback_data="set_del_15")],
+            [InlineKeyboardButton("30 Mins", callback_data="set_del_30"),
+             InlineKeyboardButton("60 Mins", callback_data="set_del_60")],
+            [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")

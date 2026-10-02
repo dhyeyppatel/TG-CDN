@@ -30,6 +30,19 @@ class Database:
         cursor = self.channels.find({"last_message_id": {"$gt": 0}})
         return await cursor.to_list(length=None)
 
+    async def get_setting(self, key, default_value):
+        doc = await self.db.settings.find_one({"_id": key})
+        if doc:
+            return doc["value"]
+        return default_value
+
+    async def set_setting(self, key, value):
+        await self.db.settings.update_one(
+            {"_id": key},
+            {"$set": {"value": value}},
+            upsert=True
+        )
+
     async def toggle_subscriber(self, chat_id):
         existing = await self.db.subscribers.find_one({"chat_id": chat_id})
         if existing:
