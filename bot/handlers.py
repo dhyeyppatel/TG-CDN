@@ -527,6 +527,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     elif query.data == "settings_channels":
         channels = await db.get_all_channels()
+        keyboard = []
         if not channels:
             text = "No active storage channels are currently tracked."
         else:
@@ -536,10 +537,28 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text += f"▪️ *{title}*\n"
                 text += f"   ID: `{c['chat_id']}`\n"
                 text += f"   Last Message ID: {c['last_message_id']}\n\n"
+                keyboard.append([InlineKeyboardButton(f"❌ Remove {title}", callback_data=f"rm_store_{c['chat_id']}")])
                 
-        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="menu_channels")]]
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu_channels")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        
+    elif query.data.startswith("rm_store_"):
+        chat_id = int(query.data.split("_")[2])
+        await db.remove_channel(chat_id)
+        
+        # update main keyboard in case they deleted the only channel
+        reply_markup_main = await get_main_keyboard()
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"🗑 Storage Channel (ID: {chat_id}) has been removed.\nMain menu updated.",
+            reply_markup=reply_markup_main
+        )
+        
+        await query.answer("Storage channel removed!", show_alert=False)
+        # re-render list
+        query.data = "settings_channels"
+        await settings_callback(update, context)
         
     elif query.data == "settings_stats":
         channels = await db.get_all_channels()
