@@ -29,6 +29,19 @@ class Database:
     async def get_all_channels(self):
         cursor = self.channels.find({"last_message_id": {"$gt": 0}})
         return await cursor.to_list(length=None)
+
+    async def get_user_progress(self, chat_id, channel_id):
+        user = await self.db.user_progress.find_one({"chat_id": chat_id, "channel_id": channel_id})
+        if user:
+            return user.get("progress", 1)
+        return 1
+
+    async def update_user_progress(self, chat_id, channel_id, progress):
+        await self.db.user_progress.update_one(
+            {"chat_id": chat_id, "channel_id": channel_id},
+            {"$set": {"progress": progress}},
+            upsert=True
+        )
         
     async def check_cooldown(self, user_id, cooldown_seconds=5):
         user = await self.db.users.find_one({"_id": user_id})

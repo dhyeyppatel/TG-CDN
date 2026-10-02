@@ -42,15 +42,25 @@ async def core_send_media(bot, chat_id):
 
     autodelete_mins = await db.get_setting("autodelete_minutes", 5)
     autodelete_secs = autodelete_mins * 60
+    
+    delivery_mode = await db.get_setting("delivery_mode", "random")
 
-    for attempt in range(10):
+    for attempt in range(20):
         chosen_channel = random.choice(channels)
         c_id = chosen_channel["chat_id"]
         last_message_id = chosen_channel["last_message_id"]
-        random_id = random.randint(1, last_message_id)
+        
+        if delivery_mode == "serial":
+            target_id = await db.get_user_progress(chat_id, c_id)
+            if target_id > last_message_id:
+                # User has exhausted this channel, loop back to start
+                await db.update_user_progress(chat_id, c_id, 1)
+                target_id = 1
+        else:
+            target_id = random.randint(1, last_message_id)
         
         try:
-            media_group = await db.get_media_group_by_message_id(c_id, random_id)
+            media_group = await db.get_media_group_by_message_id(c_id, target_id)
             
             if media_group and len(media_group.get("message_ids", [])) > 1:
                 # Copy the entire media group
@@ -70,13 +80,17 @@ async def core_send_media(bot, chat_id):
                 for sm in sent_messages:
                     await db.schedule_deletion(chat_id, sm.message_id, delete_at)
                 await db.schedule_deletion(chat_id, warning_msg.message_id, delete_at)
+                
+                if delivery_mode == "serial":
+                    await db.update_user_progress(chat_id, c_id, max(media_group["message_ids"]) + 1)
+                    
                 return True, None
             else:
                 # Normal single message copy
                 sent_message = await bot.copy_message(
                     chat_id=chat_id,
                     from_chat_id=c_id,
-                    message_id=random_id,
+                    message_id=target_id,
                     reply_markup=None
                 )
                 
@@ -90,8 +104,15 @@ async def core_send_media(bot, chat_id):
                 delete_at = int(time.time()) + autodelete_secs
                 await db.schedule_deletion(chat_id, sent_message.message_id, delete_at)
                 await db.schedule_deletion(chat_id, warning_msg.message_id, delete_at)
+                
+                if delivery_mode == "serial":
+                    await db.update_user_progress(chat_id, c_id, target_id + 1)
+                    
                 return True, None
         except BadRequest:
+            if delivery_mode == "serial":
+                # Message might be deleted in channel, skip it
+                await db.update_user_progress(chat_id, c_id, target_id + 1)
             continue
         except Exception:
             continue
@@ -323,8 +344,10 @@ async def render_menu_timers(query):
 async def render_menu_toggles(query):
     fsub = await db.get_setting("fsub_enabled", False)
     mode = await db.get_setting("bot_mode", "default")
+    delivery = await db.get_setting("delivery_mode", "random")
     
     keyboard = [
+        [InlineKeyboardButton(f"Delivery: {'🔀 Random' if delivery == 'random' else '🔢 Serial'}", callback_data="toggle_delivery")],
         [InlineKeyboardButton(f"Force Sub: {'🟢 ON' if fsub else '🔴 OFF'}", callback_data="toggle_fsub")],
         [InlineKeyboardButton(f"Mode: {'🟠 Early Access' if mode == 'early_access' else '🟢 Default'}", callback_data="toggle_mode")],
         [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
@@ -353,6 +376,13 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "menu_timers":
         await render_menu_timers(query)
     elif query.data == "menu_toggles":
+        await render_menu_toggles(query)
+        
+    elif query.data == "toggle_delivery":
+        delivery = await db.get_setting("delivery_mode", "random")
+        new_del = "serial" if delivery == "random" else "random"
+        await db.set_setting("delivery_mode", new_del)
+        await query.answer(f"Delivery mode changed to {new_del.title()}!", show_alert=False)
         await render_menu_toggles(query)
         
     elif query.data == "toggle_fsub":
