@@ -10,27 +10,29 @@ from bot.config import Config
 logger = logging.getLogger(__name__)
 
 async def get_main_keyboard():
+    keyboard = [
+        [KeyboardButton("Prev ⏪"), KeyboardButton("Next ⏩")],
+        [KeyboardButton("⏱ Auto-Send")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+async def type_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     channels = await db.get_all_channels()
     keyboard = []
     
-    # Add buttons for each storage channel 2 per row
-    row = []
     for c in channels:
         name = c.get('title', 'Unknown Channel')
-        row.append(KeyboardButton(f"📁 {name}"))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
+        keyboard.append([InlineKeyboardButton(f"📁 {name}", callback_data=f"set_type_{c['chat_id']}")])
         
-    keyboard.append([KeyboardButton("🎲 Random Media"), KeyboardButton("⏱ Toggle Auto-Send")])
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    keyboard.append([InlineKeyboardButton("🎲 All Channels (Mix)", callback_data="set_type_all")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text("Select your preferred media type:", reply_markup=reply_markup)
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = await get_main_keyboard()
     await update.message.reply_text(
-        "Welcome!\n\nSelect a category below to get a media post, or click Random Media.",
+        "Welcome!\n\nUse the buttons below to browse media, or use /type to select your preferred category.",
         reply_markup=reply_markup
     )
 async def check_fsub(bot, user_id):
@@ -47,7 +49,7 @@ async def check_fsub(bot, user_id):
     except BadRequest:
         return False
 
-async def core_send_media(bot, chat_id, specific_channel_id=None):
+async def core_send_media(bot, chat_id, specific_channel_id=None, is_prev=False):
     channels = await db.get_all_channels()
     if not channels:
         return False, "No storage channels found yet! Forward a message from your channel to me to register it."
@@ -69,11 +71,16 @@ async def core_send_media(bot, chat_id, specific_channel_id=None):
         
         if delivery_mode == "serial":
             target_id = await db.get_user_progress(chat_id, c_id)
+            if is_prev:
+                target_id = max(1, target_id - 2)
+                
             if target_id > last_message_id:
                 # User has exhausted this channel, loop back to start
                 await db.update_user_progress(chat_id, c_id, 1)
                 target_id = 1
         else:
+            if is_prev:
+                return False, "Previous button is only supported in Serial delivery mode."
             target_id = random.randint(1, last_message_id)
         
         try:
@@ -174,14 +181,20 @@ async def core_send_early_access_media(bot, chat_id):
             
     return False, "Failed to fetch early access media after multiple attempts."
 
-async def send_random_media(update: Update, context: ContextTypes.DEFAULT_TYPE, specific_channel_id=None):
+async def send_random_media(update: Update, context: ContextTypes.DEFAULT_TYPE, is_prev=False):
     chat_id = update.effective_chat.id
     mode = await db.get_setting("bot_mode", "default")
     
+    if update.message and update.message.text == "/prev":
+        is_prev = True
+        
     if mode == "early_access":
         success, error_msg = await core_send_early_access_media(context.bot, chat_id)
     else:
-        success, error_msg = await core_send_media(context.bot, chat_id, specific_channel_id)
+        # Fetch user's preferred channel
+        pref = await db.get_preferred_channel(chat_id)
+        specific = int(pref) if pref != "all" else None
+        success, error_msg = await core_send_media(context.bot, chat_id, specific, is_prev)
         
     if not success and error_msg:
         await update.message.reply_text(error_msg)
@@ -259,7 +272,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. Handle standard text buttons
     if update.message and update.message.text:
         text = update.message.text
-        if text in ["🎲 Random Media", "⏱ Toggle Auto-Send"] or text.startswith("📁 "):
+        if text in ["Prev ⏪", "Next ⏩", "⏱ Auto-Send", "/next", "/prev"]:
             # Check Force Sub
             if not await check_fsub(context.bot, update.effective_user.id):
                 fsub_link = await db.get_setting("fsub_channel_link", "")
@@ -273,18 +286,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"⏳ Please wait {wait_time}s before requesting again.")
                 return
                 
-        if text == "🎲 Random Media":
-            await send_random_media(update, context, None)
-        elif text == "⏱ Toggle Auto-Send":
+        if text in ["Next ⏩", "/next"]:
+            await send_random_media(update, context, is_prev=False)
+        elif text in ["Prev ⏪", "/prev"]:
+            await send_random_media(update, context, is_prev=True)
+        elif text == "⏱ Auto-Send":
             await toggle_autosend(update, context)
-        elif text.startswith("📁 "):
-            channel_title = text[3:]
-            channels = await db.get_all_channels()
-            target_channel = next((c for c in channels if c.get("title") == channel_title), None)
-            if target_channel:
-                await send_random_media(update, context, target_channel["chat_id"])
-            else:
-                await update.message.reply_text("Channel not found.")
 
 async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.channel_post
@@ -451,6 +458,18 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = int(query.data.split("_")[2])
         await db.set_setting("early_access_chat", chat_id)
         await query.edit_message_text(f"✅ Early Access Chat has been set to ID: {chat_id}")
+
+    elif query.data.startswith("set_type_"):
+        chat_id_str = query.data.replace("set_type_", "")
+        await db.set_preferred_channel(query.from_user.id, chat_id_str)
+        if chat_id_str == "all":
+            await query.edit_message_text("✅ Media type set to: **All Channels (Mix)**", parse_mode="Markdown")
+        else:
+            # Find name
+            channels = await db.get_all_channels()
+            target = next((c for c in channels if c["chat_id"] == int(chat_id_str)), None)
+            name = target["title"] if target else "Specific Channel"
+            await query.edit_message_text(f"✅ Media type set to: **{name}**", parse_mode="Markdown")
 
     elif query.data.startswith("fw_archive_"):
         chat_id = int(query.data.split("_")[2])

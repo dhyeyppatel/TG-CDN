@@ -134,5 +134,17 @@ class Database:
             "chat_id": chat_id,
             "message_ids": message_id
         })
+    async def get_preferred_channel(self, chat_id):
+        user = await self.db.users.find_one({"chat_id": chat_id})
+        if user:
+            return user.get("preferred_channel", "all")
+        return "all"
+
+    async def set_preferred_channel(self, chat_id, channel_id_str):
+        await self.db.users.update_one(
+            {"chat_id": chat_id},
+            {"$set": {"preferred_channel": channel_id_str}},
+            upsert=True
+        )
 
 db = Database(Config.MONGODB_URI, Config.DATABASE_NAME)
