@@ -211,11 +211,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await db.set_setting("admin_state", None)
                 await update.message.reply_text(f"✅ FSUB Link updated to: {text}\nSend /settings to view changes.")
                 return
-            elif state == "wait_grad_days":
+            elif state == "wait_archive_days":
                 if text.isdigit():
-                    await db.set_setting("graduation_days", int(text))
+                    await db.set_setting("archive_days", int(text))
                     await db.set_setting("admin_state", None)
-                    await update.message.reply_text(f"✅ Graduation time updated to {text} days.\nSend /settings to view changes.")
+                    await update.message.reply_text(f"✅ Archive time updated to {text} days.\nSend /settings to view changes.")
                 else:
                     await update.message.reply_text("❌ Please send a valid number.")
                 return
@@ -246,7 +246,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [
                 [InlineKeyboardButton("Add as Storage Channel", callback_data=f"fw_store_{chat_id}_{msg_id}")],
                 [InlineKeyboardButton("Set Early Access Chat", callback_data=f"fw_early_{chat_id}")],
-                [InlineKeyboardButton("Set Graduation Channel", callback_data=f"fw_grad_{chat_id}")],
+                [InlineKeyboardButton("Set Archive Channel", callback_data=f"fw_archive_{chat_id}")],
                 [InlineKeyboardButton("Set FSUB Channel", callback_data=f"fw_fsub_{chat_id}")]
             ]
             await update.message.reply_text(
@@ -291,9 +291,9 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if not message:
         return
         
-    # Ignore posts in the graduation channel (do not add them to the Default Pool)
-    grad_id = await db.get_setting("graduation_channel_id", "")
-    if grad_id and message.chat.id == int(grad_id):
+    # Ignore posts in the archive channel (do not add them to the Default Pool)
+    archive_id = await db.get_setting("archive_channel_id", "")
+    if archive_id and message.chat.id == int(archive_id):
         return
         
     # Any post in any channel dynamically registers/updates its last_message_id
@@ -357,14 +357,14 @@ async def render_settings_main(query):
 async def render_menu_channels(query):
     fsub_id = await db.get_setting("fsub_channel_id", "Not Set")
     early_id = await db.get_setting("early_access_chat", "Not Set")
-    grad_id = await db.get_setting("graduation_channel_id", "Not Set")
+    archive_id = await db.get_setting("archive_channel_id", "Not Set")
     
     keyboard = [
         [InlineKeyboardButton("📊 Storage Channels", callback_data="settings_channels")],
         [InlineKeyboardButton(f"FSUB Ch: {fsub_id}", callback_data="prompt_fw"), InlineKeyboardButton("❌", callback_data="rm_fsub_id")],
         [InlineKeyboardButton("Set FSUB Link", callback_data="prompt_fsub_link")],
         [InlineKeyboardButton(f"Early Access: {early_id}", callback_data="prompt_fw"), InlineKeyboardButton("❌", callback_data="rm_early")],
-        [InlineKeyboardButton(f"Graduation: {grad_id}", callback_data="prompt_fw"), InlineKeyboardButton("❌", callback_data="rm_grad")],
+        [InlineKeyboardButton(f"Archive Ch: {archive_id}", callback_data="prompt_fw"), InlineKeyboardButton("❌", callback_data="rm_archive")],
         [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
     ]
     await query.edit_message_text("⚙️ *Channels Setup*\n\n_To set a channel, forward a message from it to the bot, and select what type of channel it is. Or click buttons to remove them._", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -372,12 +372,12 @@ async def render_menu_channels(query):
 async def render_menu_timers(query):
     del_mins = await db.get_setting("autodelete_minutes", 5)
     exp_mins = await db.get_setting("autosend_expire_minutes", 60)
-    grad_days = await db.get_setting("graduation_days", 3)
+    archive_days = await db.get_setting("archive_days", 3)
     
     keyboard = [
         [InlineKeyboardButton(f"Auto-Delete: {del_mins}m", callback_data="settings_autodelete")],
         [InlineKeyboardButton(f"Auto-Send Expiry: {exp_mins}m", callback_data="settings_autoexpire")],
-        [InlineKeyboardButton(f"Graduation Time: {grad_days} Days", callback_data="prompt_grad_days")],
+        [InlineKeyboardButton(f"Archive EA Time: {archive_days} Days", callback_data="prompt_archive_days")],
         [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
     ]
     await query.edit_message_text("⚙️ *Timers & Limits*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -452,10 +452,10 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await db.set_setting("early_access_chat", chat_id)
         await query.edit_message_text(f"✅ Early Access Chat has been set to ID: {chat_id}")
 
-    elif query.data.startswith("fw_grad_"):
+    elif query.data.startswith("fw_archive_"):
         chat_id = int(query.data.split("_")[2])
-        await db.set_setting("graduation_channel_id", chat_id)
-        await query.edit_message_text(f"✅ Graduation Channel has been set to ID: {chat_id}")
+        await db.set_setting("archive_channel_id", chat_id)
+        await query.edit_message_text(f"✅ Archive Channel has been set to ID: {chat_id}")
 
     elif query.data.startswith("fw_fsub_"):
         chat_id = int(query.data.split("_")[2])
@@ -469,9 +469,9 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await db.set_setting("admin_state", "wait_fsub_link")
         await query.edit_message_text("🔗 Send me the new FSUB channel link (e.g., https://t.me/joinchat/...)")
         
-    elif query.data == "prompt_grad_days":
-        await db.set_setting("admin_state", "wait_grad_days")
-        await query.edit_message_text("📅 Send me the new Graduation Time in days (e.g., 3)")
+    elif query.data == "prompt_archive_days":
+        await db.set_setting("admin_state", "wait_archive_days")
+        await query.edit_message_text("📅 Send me the new Archive Time in days (e.g., 3)")
         
     elif query.data == "rm_fsub_id":
         await db.set_setting("fsub_channel_id", "")
@@ -483,9 +483,9 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Early Access Chat cleared!", show_alert=False)
         await render_menu_channels(query)
         
-    elif query.data == "rm_grad":
-        await db.set_setting("graduation_channel_id", "")
-        await query.answer("Graduation Channel cleared!", show_alert=False)
+    elif query.data == "rm_archive":
+        await db.set_setting("archive_channel_id", "")
+        await query.answer("Archive Channel cleared!", show_alert=False)
         await render_menu_channels(query)
         
     elif query.data == "settings_channels":

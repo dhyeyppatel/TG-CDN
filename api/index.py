@@ -50,10 +50,10 @@ async def vercel_cron():
             pass # ignore if already deleted
         await db.remove_deletion(doc["_id"])
 
-    # 2. Process Early Access Graduations (After configured Days)
-    grad_days = await db.get_setting("graduation_days", 3)
-    expired_media = await db.get_expired_early_access_media(current_time, grad_days)
-    target_channel = await db.get_setting("graduation_channel_id", "")
+    # 2. Process Early Access Archiving (After configured Days)
+    archive_days = await db.get_setting("archive_days", 3)
+    expired_media = await db.get_expired_early_access_media(current_time, archive_days)
+    target_channel = await db.get_setting("archive_channel_id", "")
     
     if target_channel:
         target_channel = int(target_channel)
