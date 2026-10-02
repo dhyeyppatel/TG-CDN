@@ -21,6 +21,18 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Welcome!\n\nClick a button below to get a random media post or start auto-sending.",
         reply_markup=reply_markup
     )
+async def check_fsub(bot, user_id):
+    fsub_enabled = await db.get_setting("fsub_enabled", False)
+    if not fsub_enabled or not Config.FSUB_CHANNEL_ID:
+        return True
+        
+    try:
+        member = await bot.get_chat_member(chat_id=Config.FSUB_CHANNEL_ID, user_id=user_id)
+        if member.status in ["left", "kicked"]:
+            return False
+        return True
+    except BadRequest:
+        return False
 
 async def core_send_media(bot, chat_id):
     channels = await db.get_all_channels()
@@ -96,6 +108,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. Handle standard text buttons
     if update.message and update.message.text:
         text = update.message.text
+        if text in ["🎲 Random Media", "⏱ Toggle Auto-Send"]:
+            # Check Force Sub
+            if not await check_fsub(context.bot, update.effective_user.id):
+                keyboard = [[InlineKeyboardButton("Join Channel 📢", url=Config.FSUB_CHANNEL_LINK)]]
+                await update.message.reply_text("⚠️ You must join our channel to use this bot!", reply_markup=InlineKeyboardMarkup(keyboard))
+                return
+                
+            # Check Cooldown
+            allowed, wait_time = await db.check_cooldown(update.effective_user.id, 5)
+            if not allowed:
+                await update.message.reply_text(f"⏳ Please wait {wait_time}s before requesting again.")
+                return
+                
         if text == "🎲 Random Media":
             await send_random_media(update, context)
         elif text == "⏱ Toggle Auto-Send":
@@ -121,16 +146,38 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
             await db.remove_channel(result.chat.id)
             logger.info(f"Bot removed from channel: {result.chat.id}, deleted from database.")
 
+async def render_settings_main(query):
+    fsub = await db.get_setting("fsub_enabled", False)
+    fsub_text = "🟢 ON" if fsub else "🔴 OFF"
+    
+    keyboard = [
+        [InlineKeyboardButton("📊 View Tracked Channels", callback_data="settings_channels")],
+        [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")],
+        [InlineKeyboardButton("⏱ Config Auto-Delete Time", callback_data="settings_autodelete")],
+        [InlineKeyboardButton("⏳ Config Auto-Send Expiry", callback_data="settings_autoexpire")],
+        [InlineKeyboardButton(f"📢 Force Sub: {fsub_text}", callback_data="toggle_fsub")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(
+        "⚙️ *Bot Settings & Admin Panel*\nSelect an option below:",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
 async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if Config.ADMIN_ID and update.effective_user.id != Config.ADMIN_ID:
         await update.message.reply_text("You are not authorized to use this command.")
         return
         
+    fsub = await db.get_setting("fsub_enabled", False)
+    fsub_text = "🟢 ON" if fsub else "🔴 OFF"
+    
     keyboard = [
         [InlineKeyboardButton("📊 View Tracked Channels", callback_data="settings_channels")],
         [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")],
         [InlineKeyboardButton("⏱ Config Auto-Delete Time", callback_data="settings_autodelete")],
-        [InlineKeyboardButton("⏳ Config Auto-Send Expiry", callback_data="settings_autoexpire")]
+        [InlineKeyboardButton("⏳ Config Auto-Send Expiry", callback_data="settings_autoexpire")],
+        [InlineKeyboardButton(f"📢 Force Sub: {fsub_text}", callback_data="toggle_fsub")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -149,18 +196,13 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     if query.data == "settings_main":
-        keyboard = [
-            [InlineKeyboardButton("📊 View Tracked Channels", callback_data="settings_channels")],
-            [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")],
-            [InlineKeyboardButton("⏱ Config Auto-Delete Time", callback_data="settings_autodelete")],
-            [InlineKeyboardButton("⏳ Config Auto-Send Expiry", callback_data="settings_autoexpire")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            "⚙️ *Bot Settings & Admin Panel*\nSelect an option below:",
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
+        await render_settings_main(query)
+        
+    elif query.data == "toggle_fsub":
+        fsub = await db.get_setting("fsub_enabled", False)
+        await db.set_setting("fsub_enabled", not fsub)
+        await query.answer("Force sub toggled!", show_alert=False)
+        await render_settings_main(query)
         
     elif query.data == "settings_channels":
         channels = await db.get_all_channels()

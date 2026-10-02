@@ -1,4 +1,5 @@
 import motor.motor_asyncio
+import time
 from bot.config import Config
 import random
 import logging
@@ -26,9 +27,24 @@ class Database:
         await self.channels.delete_one({"chat_id": chat_id})
 
     async def get_all_channels(self):
-        # Return all channels that have at least one tracked message
         cursor = self.channels.find({"last_message_id": {"$gt": 0}})
         return await cursor.to_list(length=None)
+        
+    async def check_cooldown(self, user_id, cooldown_seconds=5):
+        user = await self.db.users.find_one({"_id": user_id})
+        current_time = time.time()
+        
+        if user and "last_interaction" in user:
+            time_since = current_time - user["last_interaction"]
+            if time_since < cooldown_seconds:
+                return False, int(cooldown_seconds - time_since)
+                
+        await self.db.users.update_one(
+            {"_id": user_id},
+            {"$set": {"last_interaction": current_time}},
+            upsert=True
+        )
+        return True, 0
 
     async def get_setting(self, key, default_value):
         doc = await self.db.settings.find_one({"_id": key})

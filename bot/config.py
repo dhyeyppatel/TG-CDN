@@ -8,3 +8,5 @@ class Config:
     MONGODB_URI = os.environ.get("MONGODB_URI", "")
     DATABASE_NAME = os.environ.get("DATABASE_NAME", "media_bot_db")
     ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
+    FSUB_CHANNEL_ID = os.environ.get("FSUB_CHANNEL_ID", "")
+    FSUB_CHANNEL_LINK = os.environ.get("FSUB_CHANNEL_LINK", "")
