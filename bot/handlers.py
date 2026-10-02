@@ -9,16 +9,28 @@ from bot.config import Config
 
 logger = logging.getLogger(__name__)
 
+async def get_main_keyboard():
+    channels = await db.get_all_channels()
+    keyboard = []
+    
+    # Add buttons for each storage channel 2 per row
+    row = []
+    for c in channels:
+        name = c.get('title', 'Unknown Channel')
+        row.append(KeyboardButton(f"📁 {name}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+        
+    keyboard.append([KeyboardButton("🎲 Random Media"), KeyboardButton("⏱ Toggle Auto-Send")])
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply_markup = ReplyKeyboardMarkup(
-        [
-            [KeyboardButton("Next")],
-            [KeyboardButton("⏱ Toggle Auto-Send")]
-        ],
-        resize_keyboard=True
-    )
+    reply_markup = await get_main_keyboard()
     await update.message.reply_text(
-        "Welcome!\n\nClick a button below to get a media post or start auto-sending.",
+        "Welcome!\n\nSelect a category below to get a media post, or click Random Media.",
         reply_markup=reply_markup
     )
 async def check_fsub(bot, user_id):
@@ -35,10 +47,15 @@ async def check_fsub(bot, user_id):
     except BadRequest:
         return False
 
-async def core_send_media(bot, chat_id):
+async def core_send_media(bot, chat_id, specific_channel_id=None):
     channels = await db.get_all_channels()
     if not channels:
         return False, "No storage channels found yet! Forward a message from your channel to me to register it."
+        
+    if specific_channel_id:
+        channels = [c for c in channels if c["chat_id"] == specific_channel_id]
+        if not channels:
+            return False, "This specific channel is no longer tracked."
 
     autodelete_mins = await db.get_setting("autodelete_minutes", 5)
     autodelete_secs = autodelete_mins * 60
@@ -157,14 +174,14 @@ async def core_send_early_access_media(bot, chat_id):
             
     return False, "Failed to fetch early access media after multiple attempts."
 
-async def send_random_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def send_random_media(update: Update, context: ContextTypes.DEFAULT_TYPE, specific_channel_id=None):
     chat_id = update.effective_chat.id
     mode = await db.get_setting("bot_mode", "default")
     
     if mode == "early_access":
         success, error_msg = await core_send_early_access_media(context.bot, chat_id)
     else:
-        success, error_msg = await core_send_media(context.bot, chat_id)
+        success, error_msg = await core_send_media(context.bot, chat_id, specific_channel_id)
         
     if not success and error_msg:
         await update.message.reply_text(error_msg)
@@ -202,6 +219,22 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await update.message.reply_text("❌ Please send a valid number.")
                 return
+            elif state.startswith("wait_channel_name_"):
+                parts = state.split("_")
+                chat_id = int(parts[3])
+                msg_id = int(parts[4])
+                # Check if it exists
+                channels = await db.get_all_channels()
+                exists = next((c for c in channels if c["chat_id"] == chat_id), None)
+                if exists:
+                    await db.update_channel(chat_id, text, exists["last_message_id"])
+                else:
+                    await db.update_channel(chat_id, text, msg_id)
+                    
+                await db.set_setting("admin_state", None)
+                reply_markup = await get_main_keyboard()
+                await update.message.reply_text(f"✅ Channel display name set to: **{text}**\n\nThe main menu has been updated.", parse_mode="Markdown", reply_markup=reply_markup)
+                return
 
     # 1. Handle Channel Forwarding initialization (Admin Only)
     if update.message and update.message.forward_origin and update.message.forward_origin.type == "channel":
@@ -226,7 +259,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. Handle standard text buttons
     if update.message and update.message.text:
         text = update.message.text
-        if text in ["Next", "⏱ Toggle Auto-Send"]:
+        if text in ["🎲 Random Media", "⏱ Toggle Auto-Send"] or text.startswith("📁 "):
             # Check Force Sub
             if not await check_fsub(context.bot, update.effective_user.id):
                 fsub_link = await db.get_setting("fsub_channel_link", "")
@@ -240,10 +273,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"⏳ Please wait {wait_time}s before requesting again.")
                 return
                 
-        if text == "Next":
-            await send_random_media(update, context)
+        if text == "🎲 Random Media":
+            await send_random_media(update, context, None)
         elif text == "⏱ Toggle Auto-Send":
             await toggle_autosend(update, context)
+        elif text.startswith("📁 "):
+            channel_title = text[3:]
+            channels = await db.get_all_channels()
+            target_channel = next((c for c in channels if c.get("title") == channel_title), None)
+            if target_channel:
+                await send_random_media(update, context, target_channel["chat_id"])
+            else:
+                await update.message.reply_text("Channel not found.")
 
 async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.channel_post
@@ -401,8 +442,10 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data.startswith("fw_store_"):
         parts = query.data.split("_")
         chat_id, msg_id = int(parts[2]), int(parts[3])
-        await db.update_channel(chat_id, "Tracked Storage Channel", msg_id)
-        await query.edit_message_text(f"✅ Added as a Storage Channel! ID: {chat_id}, Last Msg: {msg_id}")
+        
+        # Prompt for channel name
+        await db.set_setting("admin_state", f"wait_channel_name_{chat_id}_{msg_id}")
+        await query.edit_message_text(f"✅ Preparing to add Storage Channel (ID: {chat_id}).\n\nPlease send the custom Display Name you want to use for this channel (e.g. 'Memes', 'Movie Edits'):")
         
     elif query.data.startswith("fw_early_"):
         chat_id = int(query.data.split("_")[2])

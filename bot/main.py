@@ -17,7 +17,7 @@ def create_app():
     
     # Settings command for admins
     app.add_handler(CommandHandler("settings", settings_handler))
-    app.add_handler(CallbackQueryHandler(settings_callback, pattern="^(settings_|set_del_|set_exp_|toggle_fsub|toggle_mode|fw_)"))
+    app.add_handler(CallbackQueryHandler(settings_callback))
     
     # Listen for button presses in PM
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
