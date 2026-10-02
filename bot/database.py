@@ -43,14 +43,17 @@ class Database:
             upsert=True
         )
 
-    async def toggle_subscriber(self, chat_id):
+    async def toggle_subscriber(self, chat_id, expires_at=None):
         existing = await self.db.subscribers.find_one({"chat_id": chat_id})
         if existing:
             await self.db.subscribers.delete_one({"chat_id": chat_id})
             return False
         else:
-            await self.db.subscribers.insert_one({"chat_id": chat_id})
+            await self.db.subscribers.insert_one({"chat_id": chat_id, "expires_at": expires_at})
             return True
+
+    async def remove_subscriber(self, chat_id):
+        await self.db.subscribers.delete_one({"chat_id": chat_id})
 
     async def get_subscribers(self):
         return await self.db.subscribers.find({}).to_list(length=None)

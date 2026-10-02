@@ -69,11 +69,15 @@ async def send_random_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def toggle_autosend(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    is_subscribed = await db.toggle_subscriber(chat_id)
+    
+    # Set auto-send to expire after 1 hour (3600 seconds)
+    expires_at = int(time.time()) + 3600
+    
+    is_subscribed = await db.toggle_subscriber(chat_id, expires_at)
     
     if is_subscribed:
         mins = await db.get_setting("autodelete_minutes", 5)
-        await update.message.reply_text(f"✅ Auto-send started! You will receive random media every 5 minutes. (They will auto-delete {mins} mins after arriving).")
+        await update.message.reply_text(f"✅ Auto-send started! You will receive random media every 5 minutes for the next hour. (They will auto-delete {mins} mins after arriving).")
     else:
         await update.message.reply_text("🛑 Auto-send stopped.")
 

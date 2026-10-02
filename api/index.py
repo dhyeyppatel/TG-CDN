@@ -51,7 +51,20 @@ async def vercel_cron():
     subscribers = await db.get_subscribers()
     from bot.handlers import core_send_media
     for sub in subscribers:
-        await core_send_media(bot, sub["chat_id"])
+        expires_at = sub.get("expires_at", 0)
+        # If there is an expiration time and it has passed
+        if expires_at and current_time > expires_at:
+            await db.remove_subscriber(sub["chat_id"])
+            try:
+                await bot.send_message(
+                    chat_id=sub["chat_id"], 
+                    text="⏳ *Your auto-send session has expired!*\nAuto-send is now turned off.",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+        else:
+            await core_send_media(bot, sub["chat_id"])
         
     return {"status": "Cron executed successfully", "deleted": len(deletions), "sent": len(subscribers)}
 
