@@ -10,10 +10,15 @@ from bot.config import Config
 logger = logging.getLogger(__name__)
 
 async def get_main_keyboard():
-    keyboard = [
-        [KeyboardButton("Prev ⏪"), KeyboardButton("Next ⏩")],
-        [KeyboardButton("⏱ Auto-Send")]
-    ]
+    delivery_mode = await db.get_setting("delivery_mode", "random")
+    keyboard = []
+    
+    if delivery_mode == "serial":
+        keyboard.append([KeyboardButton("Prev ⏪"), KeyboardButton("Next ⏩")])
+    else:
+        keyboard.append([KeyboardButton("Next ⏩")])
+        
+    keyboard.append([KeyboardButton("⏱ Auto-Send")])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 async def type_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -94,10 +99,12 @@ async def core_send_media(bot, chat_id, specific_channel_id=None, is_prev=False)
                     message_ids=media_group["message_ids"]
                 )
                 
+                reply_markup = await get_main_keyboard()
                 warning_msg = await bot.send_message(
                     chat_id=chat_id, 
                     text=f"⏳ _This media group will be automatically deleted in {autodelete_mins} minutes._",
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    reply_markup=reply_markup
                 )
                 
                 delete_at = int(time.time()) + autodelete_secs
@@ -118,10 +125,12 @@ async def core_send_media(bot, chat_id, specific_channel_id=None, is_prev=False)
                     reply_markup=None
                 )
                 
+                reply_markup = await get_main_keyboard()
                 warning_msg = await bot.send_message(
                     chat_id=chat_id, 
                     text=f"⏳ _This file will be automatically deleted in {autodelete_mins} minutes._",
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    reply_markup=reply_markup
                 )
                 
                 # Schedule DB auto-delete
@@ -164,10 +173,12 @@ async def core_send_early_access_media(bot, chat_id):
                 reply_markup=None
             )
             
+            reply_markup = await get_main_keyboard()
             warning_msg = await bot.send_message(
                 chat_id=chat_id, 
                 text=f"⏳ _This file will be automatically deleted in {autodelete_mins} minutes._",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                reply_markup=reply_markup
             )
             
             # Schedule DB auto-delete
@@ -182,11 +193,25 @@ async def core_send_early_access_media(bot, chat_id):
     return False, "Failed to fetch early access media after multiple attempts."
 
 async def send_random_media(update: Update, context: ContextTypes.DEFAULT_TYPE, is_prev=False):
+    # Check Force Sub
+    if not await check_fsub(context.bot, update.effective_user.id):
+        fsub_link = await db.get_setting("fsub_channel_link", "")
+        keyboard = [[InlineKeyboardButton("Join Channel 📢", url=fsub_link)]] if fsub_link else []
+        await update.message.reply_text("⚠️ You must join our channel to use this bot!", reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None)
+        return
+        
+    # Check Cooldown
+    allowed, wait_time = await db.check_cooldown(update.effective_user.id, 5)
+    if not allowed:
+        await update.message.reply_text(f"⏳ Please wait {wait_time}s before requesting again.")
+        return
+
     chat_id = update.effective_chat.id
     mode = await db.get_setting("bot_mode", "default")
     
-    if update.message and update.message.text == "/prev":
-        is_prev = True
+    if update.message and update.message.text:
+        if update.message.text.startswith("/prev"):
+            is_prev = True
         
     if mode == "early_access":
         success, error_msg = await core_send_early_access_media(context.bot, chat_id)
@@ -200,6 +225,13 @@ async def send_random_media(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await update.message.reply_text(error_msg)
 
 async def toggle_autosend(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Check Force Sub
+    if not await check_fsub(context.bot, update.effective_user.id):
+        fsub_link = await db.get_setting("fsub_channel_link", "")
+        keyboard = [[InlineKeyboardButton("Join Channel 📢", url=fsub_link)]] if fsub_link else []
+        await update.message.reply_text("⚠️ You must join our channel to use this bot!", reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None)
+        return
+        
     chat_id = update.effective_chat.id
     
     expire_mins = await db.get_setting("autosend_expire_minutes", 60)
@@ -272,20 +304,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. Handle standard text buttons
     if update.message and update.message.text:
         text = update.message.text
-        if text in ["Prev ⏪", "Next ⏩", "⏱ Auto-Send", "/next", "/prev"]:
-            # Check Force Sub
-            if not await check_fsub(context.bot, update.effective_user.id):
-                fsub_link = await db.get_setting("fsub_channel_link", "")
-                keyboard = [[InlineKeyboardButton("Join Channel 📢", url=fsub_link)]] if fsub_link else []
-                await update.message.reply_text("⚠️ You must join our channel to use this bot!", reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None)
-                return
-                
-            # Check Cooldown
-            allowed, wait_time = await db.check_cooldown(update.effective_user.id, 5)
-            if not allowed:
-                await update.message.reply_text(f"⏳ Please wait {wait_time}s before requesting again.")
-                return
-                
         if text in ["Next ⏩", "/next"]:
             await send_random_media(update, context, is_prev=False)
         elif text in ["Prev ⏪", "/prev"]:
