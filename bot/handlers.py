@@ -201,6 +201,9 @@ async def reaction_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if reaction.new_reaction:
             await db.add_early_access_media(chat_id, reaction.message_id)
             logger.info(f"Added message {reaction.message_id} to Early Access Media")
+        elif not reaction.new_reaction and reaction.old_reaction:
+            await db.remove_early_access_media(chat_id, reaction.message_id)
+            logger.info(f"Removed message {reaction.message_id} from Early Access Media due to unreact")
 
 async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # This fires when the bot is added or removed from a chat
