@@ -50,7 +50,22 @@ async def vercel_cron():
             pass # ignore if already deleted
         await db.remove_deletion(doc["_id"])
 
-    # 2. Process autosend
+    # 2. Process Early Access Graduations (After 3 Days)
+    expired_media = await db.get_expired_early_access_media(current_time, 3)
+    target_channel = -1002684551966
+    for media in expired_media:
+        try:
+            await bot.copy_message(
+                chat_id=target_channel,
+                from_chat_id=media["chat_id"],
+                message_id=media["message_id"]
+            )
+        except Exception:
+            pass  # Ignore errors (e.g., deleted message or missing bot permissions)
+        finally:
+            await db.remove_early_access_media(media["chat_id"], media["message_id"])
+
+    # 3. Process autosend
     subscribers = await db.get_subscribers()
     mode = await db.get_setting("bot_mode", "default")
     from bot.handlers import core_send_media, core_send_early_access_media

@@ -62,7 +62,10 @@ class Database:
     async def add_early_access_media(self, chat_id, message_id):
         await self.db.early_access_media.update_one(
             {"chat_id": chat_id, "message_id": message_id},
-            {"$set": {"chat_id": chat_id, "message_id": message_id}},
+            {
+                "$set": {"chat_id": chat_id, "message_id": message_id},
+                "$setOnInsert": {"added_at": time.time()}
+            },
             upsert=True
         )
         
@@ -72,6 +75,11 @@ class Database:
         
     async def remove_early_access_media(self, chat_id, message_id):
         await self.db.early_access_media.delete_one({"chat_id": chat_id, "message_id": message_id})
+
+    async def get_expired_early_access_media(self, current_time, days=3):
+        threshold = current_time - (days * 24 * 60 * 60)
+        cursor = self.db.early_access_media.find({"added_at": {"$lt": threshold}})
+        return await cursor.to_list(length=None)
 
     async def toggle_subscriber(self, chat_id, expires_at=None):
         existing = await self.db.subscribers.find_one({"chat_id": chat_id})
