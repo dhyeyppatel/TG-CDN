@@ -59,6 +59,20 @@ class Database:
             upsert=True
         )
 
+    async def add_early_access_media(self, chat_id, message_id):
+        await self.db.early_access_media.update_one(
+            {"chat_id": chat_id, "message_id": message_id},
+            {"$set": {"chat_id": chat_id, "message_id": message_id}},
+            upsert=True
+        )
+        
+    async def get_early_access_media_all(self):
+        cursor = self.db.early_access_media.find({})
+        return await cursor.to_list(length=None)
+        
+    async def remove_early_access_media(self, chat_id, message_id):
+        await self.db.early_access_media.delete_one({"chat_id": chat_id, "message_id": message_id})
+
     async def toggle_subscriber(self, chat_id, expires_at=None):
         existing = await self.db.subscribers.find_one({"chat_id": chat_id})
         if existing:

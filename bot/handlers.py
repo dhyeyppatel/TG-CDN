@@ -74,8 +74,53 @@ async def core_send_media(bot, chat_id):
             
     return False, "Couldn't find a valid post after several attempts. Please try again later!"
 
+async def core_send_early_access_media(bot, chat_id):
+    media_list = await db.get_early_access_media_all()
+    if not media_list:
+        return False, "No early access media found yet! React to a message in your Early Access chat to add it."
+
+    autodelete_mins = await db.get_setting("autodelete_minutes", 5)
+    autodelete_secs = autodelete_mins * 60
+
+    for attempt in range(10):
+        chosen = random.choice(media_list)
+        c_id = chosen["chat_id"]
+        m_id = chosen["message_id"]
+        
+        try:
+            sent_message = await bot.copy_message(
+                chat_id=chat_id,
+                from_chat_id=c_id,
+                message_id=m_id,
+                reply_markup=None
+            )
+            
+            warning_msg = await bot.send_message(
+                chat_id=chat_id, 
+                text=f"⏳ _This file will be automatically deleted in {autodelete_mins} minutes._",
+                parse_mode="Markdown"
+            )
+            
+            # Schedule DB auto-delete
+            delete_at = int(time.time()) + autodelete_secs
+            await db.schedule_deletion(chat_id, sent_message.message_id, delete_at)
+            await db.schedule_deletion(chat_id, warning_msg.message_id, delete_at)
+            return True, None
+        except BadRequest:
+            await db.remove_early_access_media(c_id, m_id)
+            continue
+            
+    return False, "Failed to fetch early access media after multiple attempts."
+
 async def send_random_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    success, error_msg = await core_send_media(context.bot, update.effective_chat.id)
+    chat_id = update.effective_chat.id
+    mode = await db.get_setting("bot_mode", "default")
+    
+    if mode == "early_access":
+        success, error_msg = await core_send_early_access_media(context.bot, chat_id)
+    else:
+        success, error_msg = await core_send_media(context.bot, chat_id)
+        
     if not success and error_msg:
         await update.message.reply_text(error_msg)
 
@@ -101,8 +146,15 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             title = update.message.forward_origin.chat.title
             msg_id = update.message.forward_origin.message_id
             
-            await db.update_channel(chat_id, title, msg_id)
-            await update.message.reply_text(f"✅ Successfully registered channel:\n**{title}**\nLast Message ID: {msg_id}")
+            keyboard = [
+                [InlineKeyboardButton("Add as Storage Channel", callback_data=f"fw_store_{chat_id}_{msg_id}")],
+                [InlineKeyboardButton("Set as Early Access Chat", callback_data=f"fw_early_{chat_id}")]
+            ]
+            await update.message.reply_text(
+                f"You forwarded a message from **{title}**.\nWhat do you want to do with this chat?",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
             return
 
     # 2. Handle standard text buttons
@@ -135,6 +187,21 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await db.update_channel(message.chat.id, message.chat.title, message.message_id)
     logger.info(f"Updated LAST_MESSAGE_ID to {message.message_id} for channel {message.chat.id}")
 
+async def reaction_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reaction = update.message_reaction
+    if not reaction:
+        return
+        
+    chat_id = reaction.chat.id
+    early_chat = await db.get_setting("early_access_chat", None)
+    
+    # If the reaction happened in the Early Access chat
+    if early_chat and chat_id == int(early_chat):
+        # Check if the reaction has new additions
+        if reaction.new_reaction:
+            await db.add_early_access_media(chat_id, reaction.message_id)
+            logger.info(f"Added message {reaction.message_id} to Early Access Media")
+
 async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # This fires when the bot is added or removed from a chat
     result = update.my_chat_member
@@ -150,12 +217,16 @@ async def render_settings_main(query):
     fsub = await db.get_setting("fsub_enabled", False)
     fsub_text = "🟢 ON" if fsub else "🔴 OFF"
     
+    mode = await db.get_setting("bot_mode", "default")
+    mode_text = "🟠 Early Access Mode" if mode == "early_access" else "🟢 Default Mode"
+    
     keyboard = [
         [InlineKeyboardButton("📊 View Tracked Channels", callback_data="settings_channels")],
         [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")],
         [InlineKeyboardButton("⏱ Config Auto-Delete Time", callback_data="settings_autodelete")],
         [InlineKeyboardButton("⏳ Config Auto-Send Expiry", callback_data="settings_autoexpire")],
-        [InlineKeyboardButton(f"📢 Force Sub: {fsub_text}", callback_data="toggle_fsub")]
+        [InlineKeyboardButton(f"📢 Force Sub: {fsub_text}", callback_data="toggle_fsub")],
+        [InlineKeyboardButton(f"Mode: {mode_text}", callback_data="toggle_mode")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
@@ -172,12 +243,16 @@ async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fsub = await db.get_setting("fsub_enabled", False)
     fsub_text = "🟢 ON" if fsub else "🔴 OFF"
     
+    mode = await db.get_setting("bot_mode", "default")
+    mode_text = "🟠 Early Access Mode" if mode == "early_access" else "🟢 Default Mode"
+    
     keyboard = [
         [InlineKeyboardButton("📊 View Tracked Channels", callback_data="settings_channels")],
         [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")],
         [InlineKeyboardButton("⏱ Config Auto-Delete Time", callback_data="settings_autodelete")],
         [InlineKeyboardButton("⏳ Config Auto-Send Expiry", callback_data="settings_autoexpire")],
-        [InlineKeyboardButton(f"📢 Force Sub: {fsub_text}", callback_data="toggle_fsub")]
+        [InlineKeyboardButton(f"📢 Force Sub: {fsub_text}", callback_data="toggle_fsub")],
+        [InlineKeyboardButton(f"Mode: {mode_text}", callback_data="toggle_mode")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -203,6 +278,24 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await db.set_setting("fsub_enabled", not fsub)
         await query.answer("Force sub toggled!", show_alert=False)
         await render_settings_main(query)
+        
+    elif query.data == "toggle_mode":
+        mode = await db.get_setting("bot_mode", "default")
+        new_mode = "early_access" if mode == "default" else "default"
+        await db.set_setting("bot_mode", new_mode)
+        await query.answer(f"Mode changed to {new_mode.replace('_', ' ').title()}!", show_alert=False)
+        await render_settings_main(query)
+        
+    elif query.data.startswith("fw_store_"):
+        parts = query.data.split("_")
+        chat_id, msg_id = int(parts[2]), int(parts[3])
+        await db.update_channel(chat_id, "Tracked Storage Channel", msg_id)
+        await query.edit_message_text(f"✅ Added as a Storage Channel! ID: {chat_id}, Last Msg: {msg_id}")
+        
+    elif query.data.startswith("fw_early_"):
+        chat_id = int(query.data.split("_")[2])
+        await db.set_setting("early_access_chat", chat_id)
+        await query.edit_message_text(f"✅ Early Access Chat has been set to ID: {chat_id}")
         
     elif query.data == "settings_channels":
         channels = await db.get_all_channels()

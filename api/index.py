@@ -27,7 +27,10 @@ async def set_webhook(url: str):
         await tg_app.initialize()
     
     webhook_url = f"{url.rstrip('/')}/api/webhook"
-    await tg_app.bot.set_webhook(url=webhook_url)
+    await tg_app.bot.set_webhook(
+        url=webhook_url,
+        allowed_updates=["message", "callback_query", "channel_post", "my_chat_member", "message_reaction"]
+    )
     return {"status": "Webhook set successfully", "url": webhook_url}
 
 @app.get("/api/cron")
@@ -49,7 +52,8 @@ async def vercel_cron():
 
     # 2. Process autosend
     subscribers = await db.get_subscribers()
-    from bot.handlers import core_send_media
+    mode = await db.get_setting("bot_mode", "default")
+    from bot.handlers import core_send_media, core_send_early_access_media
     for sub in subscribers:
         expires_at = sub.get("expires_at", 0)
         # If there is an expiration time and it has passed
@@ -64,7 +68,10 @@ async def vercel_cron():
             except Exception:
                 pass
         else:
-            await core_send_media(bot, sub["chat_id"])
+            if mode == "early_access":
+                await core_send_early_access_media(bot, sub["chat_id"])
+            else:
+                await core_send_media(bot, sub["chat_id"])
         
     return {"status": "Cron executed successfully", "deleted": len(deletions), "sent": len(subscribers)}
 
