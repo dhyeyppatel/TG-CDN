@@ -70,14 +70,14 @@ async def send_random_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def toggle_autosend(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
-    # Set auto-send to expire after 1 hour (3600 seconds)
-    expires_at = int(time.time()) + 3600
+    expire_mins = await db.get_setting("autosend_expire_minutes", 60)
+    expires_at = int(time.time()) + (expire_mins * 60)
     
     is_subscribed = await db.toggle_subscriber(chat_id, expires_at)
     
     if is_subscribed:
         mins = await db.get_setting("autodelete_minutes", 5)
-        await update.message.reply_text(f"✅ Auto-send started! You will receive random media every 5 minutes for the next hour. (They will auto-delete {mins} mins after arriving).")
+        await update.message.reply_text(f"✅ Auto-send started! You will receive random media every 5 minutes for the next {expire_mins} minutes. (They will auto-delete {mins} mins after arriving).")
     else:
         await update.message.reply_text("🛑 Auto-send stopped.")
 
@@ -129,7 +129,8 @@ async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📊 View Tracked Channels", callback_data="settings_channels")],
         [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")],
-        [InlineKeyboardButton("⏱ Config Auto-Delete Time", callback_data="settings_autodelete")]
+        [InlineKeyboardButton("⏱ Config Auto-Delete Time", callback_data="settings_autodelete")],
+        [InlineKeyboardButton("⏳ Config Auto-Send Expiry", callback_data="settings_autoexpire")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -151,7 +152,8 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("📊 View Tracked Channels", callback_data="settings_channels")],
             [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")],
-            [InlineKeyboardButton("⏱ Config Auto-Delete Time", callback_data="settings_autodelete")]
+            [InlineKeyboardButton("⏱ Config Auto-Delete Time", callback_data="settings_autodelete")],
+            [InlineKeyboardButton("⏳ Config Auto-Send Expiry", callback_data="settings_autoexpire")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
@@ -206,6 +208,27 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
              InlineKeyboardButton("15 Mins", callback_data="set_del_15")],
             [InlineKeyboardButton("30 Mins", callback_data="set_del_30"),
              InlineKeyboardButton("60 Mins", callback_data="set_del_60")],
+            [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+    elif query.data == "settings_autoexpire" or query.data.startswith("set_exp_"):
+        if query.data.startswith("set_exp_"):
+            mins = int(query.data.split("_")[2])
+            await db.set_setting("autosend_expire_minutes", mins)
+            await query.answer(f"Auto-Send expiry set to {mins} minutes!", show_alert=False)
+            
+        current_time = await db.get_setting("autosend_expire_minutes", 60)
+        text = f"⏳ *Auto-Send Expiry Configuration*\n\nCurrent duration: **{current_time} minutes**\n\nSelect a new duration for auto-send subscriptions:"
+        
+        keyboard = [
+            [InlineKeyboardButton("5 Mins", callback_data="set_exp_5"),
+             InlineKeyboardButton("15 Mins", callback_data="set_exp_15"),
+             InlineKeyboardButton("30 Mins", callback_data="set_exp_30")],
+            [InlineKeyboardButton("1 Hour", callback_data="set_exp_60"),
+             InlineKeyboardButton("3 Hours", callback_data="set_exp_180"),
+             InlineKeyboardButton("12 Hours", callback_data="set_exp_720")],
             [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
