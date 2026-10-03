@@ -42,6 +42,14 @@ async def check_fsub(bot, user_id):
     except BadRequest:
         return False
 
+async def send_log(bot, db, text):
+    log_channel = await db.get_setting("log_channel_id", None)
+    if log_channel:
+        try:
+            await bot.send_message(chat_id=log_channel, text=text, parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Failed to send log to {log_channel}: {e}")
+
 # ─── Core Media Logic ─────────────────────────────────────
 
 async def core_send_media(bot, chat_id, specific_channel_id=None, is_prev=False):
@@ -220,6 +228,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 days = await db.get_setting("shortener_duration_days", 1)
                 await db.add_premium_user(update.effective_user.id, days)
                 await update.message.reply_text(f"🎉 **Congratulations!** You've claimed {days} days of Premium access by watching the ad!", parse_mode="Markdown")
+                await send_log(context.bot, db, f"🔗 <b>Shortener Unlocked</b>\n<a href='tg://user?id={update.effective_user.id}'>{update.effective_user.first_name}</a> completed an ad and got {days} days premium.")
             else:
                 await update.message.reply_text("❌ This link is invalid, already used, or does not belong to you.")
         elif arg.startswith("ref_"):
@@ -230,6 +239,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await db.add_premium_user(referrer_id, days)
                     try:
                         await context.bot.send_message(chat_id=referrer_id, text=f"🎉 **New Referral!** Someone used your invite link. You've earned {days} days of Premium access!")
+                        await send_log(context.bot, db, f"👥 <b>Referral</b>\n<a href='tg://user?id={referrer_id}'>{referrer_id}</a> referred <a href='tg://user?id={update.effective_user.id}'>{update.effective_user.first_name}</a> and earned {days} days premium.")
                     except Exception:
                         pass
         
@@ -252,6 +262,11 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     inline_kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🤖 Create your own Clone", url=clone_url)]
     ])
+    
+    is_new = await db.add_user(update.effective_user.id, update.effective_user.first_name, update.effective_user.username)
+    if is_new:
+        await send_log(context.bot, db, f"🆕 <b>New User</b>\n<a href='tg://user?id={update.effective_user.id}'>{update.effective_user.first_name}</a> (<code>{update.effective_user.id}</code>) started the bot.")
+        
     
     await update.message.reply_text(welcome_text, reply_markup=inline_kb, parse_mode="Markdown")
     await update.message.reply_text("👇 Choose an option below:", reply_markup=reply_markup)
@@ -527,17 +542,22 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif state == "wait_add_prem":
                 parts = text.split()
                 if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                    await db.add_premium_user(int(parts[0]), int(parts[1]))
+                    user_id = int(parts[0])
+                    days = int(parts[1])
+                    await db.add_premium_user(user_id, days)
                     await db.set_setting("admin_state", None)
-                    await update.message.reply_text(f"✅ User `{parts[0]}` has been granted premium access for {parts[1]} days!", parse_mode="Markdown")
+                    await update.message.reply_text(f"✅ User `{user_id}` has been granted premium access for {days} days!", parse_mode="Markdown")
+                    await send_log(context.bot, db, f"👑 <b>Premium Added</b>\nAdmin granted <b>{days} days</b> to <a href='tg://user?id={user_id}'>{user_id}</a>.")
                 else:
                     await update.message.reply_text("❌ Invalid format. Please send ID and days (e.g. `123456789 3`).")
                 return
             elif state == "wait_rm_prem":
                 if text.isdigit():
-                    await db.remove_premium_user(int(text))
+                    user_id = int(text)
+                    await db.remove_premium_user(user_id)
                     await db.set_setting("admin_state", None)
-                    await update.message.reply_text(f"❌ User `{text}`'s premium access has been revoked.", parse_mode="Markdown")
+                    await update.message.reply_text(f"❌ User `{user_id}`'s premium access has been revoked.", parse_mode="Markdown")
+                    await send_log(context.bot, db, f"🚫 <b>Premium Revoked</b>\nAdmin revoked premium for <a href='tg://user?id={user_id}'>{user_id}</a>.")
                 else:
                     await update.message.reply_text("❌ Please send a valid user ID (numbers only).")
                 return
@@ -653,6 +673,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await db.set_setting("archive_channel_id", chat_id)
                     await update.message.reply_text(f"✅ Archive Channel has been set to ID: `{chat_id}`", parse_mode="Markdown")
                     await db.set_setting("admin_state", None)
+                elif state == "wait_fw_log":
+                    await db.set_setting("log_channel_id", chat_id)
+                    await update.message.reply_text(f"✅ Log Channel has been set to ID: `{chat_id}`", parse_mode="Markdown")
+                    await db.set_setting("admin_state", None)
                 return
             else:
                 await update.message.reply_text("❌ Invalid format. Please forward a valid message from a channel, or type a raw channel ID (e.g., `-1001234567890`).", parse_mode="Markdown")
@@ -724,6 +748,8 @@ async def render_menu_channels(query):
     early_id = await db.get_setting("early_access_chat", "Not Set")
     archive_id = await db.get_setting("archive_channel_id", "Not Set")
     
+    log_id = await db.get_setting("log_channel_id", "Not Set")
+    
     keyboard = [
         [InlineKeyboardButton("➕ Add Storage Channel", callback_data="prompt_fw_store")],
         [InlineKeyboardButton("📊 Storage Channels", callback_data="settings_channels")],
@@ -731,6 +757,7 @@ async def render_menu_channels(query):
         [InlineKeyboardButton("🔗 Set FSUB Link", callback_data="prompt_fsub_link")],
         [InlineKeyboardButton(f"Early Access: {early_id}", callback_data="prompt_fw_early"), InlineKeyboardButton("❌", callback_data="rm_early")],
         [InlineKeyboardButton(f"Archive Ch: {archive_id}", callback_data="prompt_fw_archive"), InlineKeyboardButton("❌", callback_data="rm_archive")],
+        [InlineKeyboardButton(f"Log Ch: {log_id}", callback_data="prompt_fw_log"), InlineKeyboardButton("❌", callback_data="rm_log")],
         [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
     ]
     await query.edit_message_text("⚙️ *Channels Setup*\n\n_Click a button to set a channel, or forward a message after clicking._", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -1025,6 +1052,11 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "rm_archive":
         await db.set_setting("archive_channel_id", "")
         await query.answer("Archive Channel cleared!", show_alert=False)
+        await render_menu_channels(query)
+        
+    elif query.data == "rm_log":
+        await db.set_setting("log_channel_id", "")
+        await query.answer("Log Channel cleared!", show_alert=False)
         await render_menu_channels(query)
         
     elif query.data == "settings_channels":
