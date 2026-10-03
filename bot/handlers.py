@@ -212,13 +212,16 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     clone_mode = await db.get_setting("clone_mode", True)
     if clone_mode:
-        inline_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🤖 Create your own Clone", url=f"https://t.me/{bot_info.username}?start=cdn")]
-        ])
-        await update.message.reply_text(welcome_text, reply_markup=inline_kb, parse_mode="Markdown")
-        await update.message.reply_text("👇 Choose an option below:", reply_markup=reply_markup)
+        clone_url = f"https://t.me/{bot_info.username}?start=cdn"
     else:
-        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+        clone_url = "https://t.me/CThreadpaybot?start=cdn"
+        
+    inline_kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🤖 Create your own Clone", url=clone_url)]
+    ])
+    
+    await update.message.reply_text(welcome_text, reply_markup=inline_kb, parse_mode="Markdown")
+    await update.message.reply_text("👇 Choose an option below:", reply_markup=reply_markup)
 
 async def type_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
