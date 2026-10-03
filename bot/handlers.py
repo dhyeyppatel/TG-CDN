@@ -894,10 +894,11 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     elif query.data == "prompt_pay_info":
         await db.set_setting("admin_state", "wait_pay_info")
-        await query.edit_message_text("💳 Send the Payment Instructions text to display to users:")
+        current = await db.get_setting("payment_info", "Not Set")
+        await query.edit_message_text(f"💳 *Payment Instructions*\n\n**Current:**\n`{current}`\n\nSend the Payment Instructions text to display to users:", parse_mode="Markdown")
     elif query.data == "prompt_add_plan":
         await db.set_setting("admin_state", "wait_add_plan")
-        await query.edit_message_text("💰 Send the plan details in this format: `PRICE DAYS`\nExample (29/- for 3 days): `29 3`")
+        await query.edit_message_text("💰 Send the plan details in this format: `PRICE DAYS`\nExample (29/- for 3 days): `29 3`\n\n_You can send multiple plans on separate lines._", parse_mode="Markdown")
     elif query.data.startswith("rm_plan_"):
         plan_id = query.data.replace("rm_plan_", "")
         await db.remove_plan(plan_id)
@@ -905,17 +906,21 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await settings_callback(update, context)
     elif query.data == "prompt_shortener_api":
         await db.set_setting("admin_state", "wait_shortener_api")
-        await query.edit_message_text("🔗 Send your Earn4link (or compatible) API Token:")
+        current = await db.get_setting("shortener_api", "Not Set")
+        await query.edit_message_text(f"🔗 *Shortener API Token*\n\n**Current:** `{current}`\n\nSend your Earn4link (or compatible) API Token:", parse_mode="Markdown")
     elif query.data == "prompt_shortener_days":
         await db.set_setting("admin_state", "wait_shortener_days")
-        await query.edit_message_text("🔗 Send the reward duration in days (e.g. `1`):")
+        current = await db.get_setting("shortener_duration_days", 1)
+        await query.edit_message_text(f"🔗 *Shortener Reward Days*\n\n**Current:** `{current}`\n\nSend the reward duration in days (e.g. `1`):", parse_mode="Markdown")
     elif query.data == "prompt_ref_days":
         await db.set_setting("admin_state", "wait_ref_days")
-        await query.edit_message_text("👥 Send the referral reward duration in days (e.g. `1`):")
+        current = await db.get_setting("referral_duration_days", 1)
+        await query.edit_message_text(f"👥 *Referral Reward Days*\n\n**Current:** `{current}`\n\nSend the referral reward duration in days (e.g. `1`):", parse_mode="Markdown")
         
     elif query.data == "prompt_shortener_domain":
         await db.set_setting("admin_state", "wait_shortener_domain")
-        await query.edit_message_text("🔗 Send your Shortener API Domain (e.g. `earn4link.in`):")
+        current = await db.get_setting("shortener_domain", "earn4link.in")
+        await query.edit_message_text(f"🔗 *Shortener API Domain*\n\n**Current:** `{current}`\n\nSend your Shortener API Domain (e.g. `earn4link.in`):", parse_mode="Markdown")
         
     elif query.data == "toggle_delivery":
         delivery = await db.get_setting("delivery_mode", "random")
