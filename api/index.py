@@ -38,11 +38,14 @@ async def set_webhook(url: str):
     global_db = get_db()
     await global_db.set_setting("app_domain", url.rstrip('/'))
     
-    await tg_app.bot.set_webhook(
-        url=webhook_url,
-        allowed_updates=["message", "callback_query", "channel_post", "my_chat_member", "message_reaction", "message_reaction_count"]
-    )
-    return {"status": "Webhook set successfully", "url": webhook_url}
+    try:
+        await tg_app.bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=["message", "callback_query", "channel_post", "my_chat_member", "message_reaction", "message_reaction_count"]
+        )
+        return {"status": "Webhook set successfully", "url": webhook_url}
+    except Exception as e:
+        return {"status": "Error", "message": str(e), "hint": "Are you sure your BOT_TOKEN is correct in Vercel Environment Variables?"}
 
 @app.get("/api/cron")
 async def vercel_cron():
