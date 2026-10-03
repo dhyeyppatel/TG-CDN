@@ -262,6 +262,30 @@ class Database:
             return True
         return False
 
+    async def get_admins(self):
+        admins_doc = await self.settings.find_one({"_id": "admins"})
+        return admins_doc.get("list", []) if admins_doc else []
+
+    async def add_admin(self, user_id):
+        await self.settings.update_one(
+            {"_id": "admins"},
+            {"$addToSet": {"list": user_id}},
+            upsert=True
+        )
+
+    async def remove_admin(self, user_id):
+        await self.settings.update_one(
+            {"_id": "admins"},
+            {"$pull": {"list": user_id}}
+        )
+
+    async def is_admin(self, user_id):
+        owner_id = await self.get_setting("owner_id", Config.OWNER_ID)
+        if user_id == owner_id:
+            return True
+        admins = await self.get_admins()
+        return user_id in admins
+
 _dbs = {}
 def get_db(bot_id=None):
     if bot_id not in _dbs:

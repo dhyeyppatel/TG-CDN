@@ -211,8 +211,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         arg = context.args[0]
         if arg == "cdn":
             clone_mode = await db.get_setting("clone_mode", True)
-            owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
-            if not clone_mode and update.effective_user.id != owner_id:
+            is_admin = await db.is_admin(update.effective_user.id)
+            if not clone_mode and not is_admin:
                 await update.message.reply_text("❌ Clone mode is currently disabled by the owner.")
                 return
                 
@@ -295,8 +295,7 @@ async def type_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
-    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
-    if update.effective_user.id != owner_id:
+    if not await db.is_admin(update.effective_user.id):
         return
         
     if not context.args:
@@ -315,8 +314,7 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
-    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
-    if update.effective_user.id != owner_id:
+    if not await db.is_admin(update.effective_user.id):
         return
         
     if not context.args:
@@ -332,6 +330,47 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db.set_user_banned(user_id, False)
     await update.message.reply_text(f"✅ User `{user_id}` has been unbanned.", parse_mode="Markdown")
     await send_log(context.bot, db, f"✅ <b>User Unbanned</b>\nAdmin unbanned user <code>{user_id}</code>.")
+
+async def addadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = get_db(context.bot.id)
+    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
+    if update.effective_user.id != owner_id:
+        return
+        
+    if not context.args:
+        await update.message.reply_text("Usage: `/addadmin <user_id>`", parse_mode="Markdown")
+        return
+        
+    user_id_str = context.args[0]
+    if not user_id_str.isdigit():
+        await update.message.reply_text("❌ Please provide a valid numeric user ID.")
+        return
+        
+    user_id = int(user_id_str)
+    await db.add_admin(user_id)
+    await update.message.reply_text(f"✅ User `{user_id}` has been added as an admin.", parse_mode="Markdown")
+    await send_log(context.bot, db, f"👮 <b>Admin Added</b>\nUser <code>{user_id}</code> is now an admin.")
+
+async def rmadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = get_db(context.bot.id)
+    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
+    if update.effective_user.id != owner_id:
+        return
+        
+    if not context.args:
+        await update.message.reply_text("Usage: `/rmadmin <user_id>`", parse_mode="Markdown")
+        return
+        
+    user_id_str = context.args[0]
+    if not user_id_str.isdigit():
+        await update.message.reply_text("❌ Please provide a valid numeric user ID.")
+        return
+        
+    user_id = int(user_id_str)
+    await db.remove_admin(user_id)
+    await update.message.reply_text(f"✅ User `{user_id}` has been removed from admins.", parse_mode="Markdown")
+    await send_log(context.bot, db, f"👮 <b>Admin Removed</b>\nUser <code>{user_id}</code> is no longer an admin.")
+
 
 async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
@@ -441,7 +480,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /help — Show this help message\n"
     )
     
-    if owner_id and update.effective_user.id == owner_id:
+    if await db.is_admin(update.effective_user.id):
         text += (
             "\n👑 *Admin Features:*\n"
             "• /settings — Open the Admin Control Panel\n"
@@ -456,9 +495,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def clone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
     clone_mode = await db.get_setting("clone_mode", True)
-    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
     
-    if not clone_mode and update.effective_user.id != owner_id:
+    if not clone_mode and not await db.is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Clone mode is currently disabled by the owner.")
         return
 
@@ -566,13 +604,9 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
-    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
     
-    if not owner_id:
-        return
-
     # Handle Admin States
-    if update.effective_user.id == owner_id:
+    if await db.is_admin(update.effective_user.id):
         state = await db.get_setting("admin_state", None)
         
         # Text-based admin states
@@ -841,8 +875,7 @@ async def render_menu_toggles(query):
 
 async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
-    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
-    if not owner_id or update.effective_user.id != owner_id:
+    if not await db.is_admin(update.effective_user.id):
         await update.message.reply_text("🔒 You are not authorized to use this command.")
         return
         
@@ -851,9 +884,8 @@ async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
     query = update.callback_query
-    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
     
-    if query.from_user.id != owner_id and await db.is_user_banned(query.from_user.id):
+    if not await db.is_admin(query.from_user.id) and await db.is_user_banned(query.from_user.id):
         await query.answer("❌ You are banned.", show_alert=True)
         return
         
@@ -912,7 +944,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # All other callbacks require owner
-    if not owner_id or query.from_user.id != owner_id:
+    if not await db.is_admin(query.from_user.id):
         await query.answer("🔒 Unauthorized.", show_alert=True)
         return
         
