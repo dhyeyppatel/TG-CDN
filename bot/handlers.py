@@ -470,13 +470,16 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Here are the available features and commands:\n\n"
         "🔹 *Core Features:*\n"
         "• *Next / Prev* — Request the next (or previous) media file. Prev only works in Serial mode.\n"
-        "• *Auto-Send* — Automatically receive a new media file every 5 minutes! Toggle on/off.\n\n"
+        "• *Auto-Send* — Automatically receive a new media file every 5 minutes! Toggle on/off.\n"
+        "• *Premium* — Watch ads or invite friends to get exclusive Premium benefits.\n\n"
         "🔹 *Commands:*\n"
         "• /start — Restart the bot and show the main menu\n"
         "• /type — Filter by a specific media category\n"
         "• /next — Request the next media\n"
         "• /prev — Request the previous media\n"
         "• /autosend — Toggle the Auto-Send feature\n"
+        "• /premium — Access Premium features, watch ads, or refer friends\n"
+        "• /clone — Create your own instance of this bot (if enabled)\n"
         "• /help — Show this help message\n"
     )
     
@@ -484,11 +487,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += (
             "\n👑 *Admin Features:*\n"
             "• /settings — Open the Admin Control Panel\n"
-            "   ◦ *Storage Channels* — Bot pulls media from these\n"
-            "   ◦ *Early Access* — Exclusive pool before archival\n"
-            "   ◦ *Force Sub* — Require users to join a channel\n"
-            "   ◦ *Clone Mode* — Allow/disallow users to clone\n"
+            "• /ban & /unban <id> — Restrict access for a user\n"
         )
+        owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
+        if update.effective_user.id == owner_id:
+            text += (
+                "• /addadmin & /rmadmin <id> — Manage bot admins (Owner only)\n"
+            )
         
     await update.message.reply_text(text, parse_mode="Markdown")
 
