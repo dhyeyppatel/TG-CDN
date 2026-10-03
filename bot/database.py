@@ -20,6 +20,7 @@ class Database:
         self.pending_deletions = self.db[f"{prefix}pending_deletions"]
         self.media_groups = self.db[f"{prefix}media_groups"]
         self.user_progress = self.db[f"{prefix}user_progress"]
+        self.premium_users = self.db[f"{prefix}premium_users"]
         self.bot_registry = self.db["bot_registry"]
 
     async def update_channel(self, chat_id, title, message_id):
@@ -32,6 +33,17 @@ class Database:
             },
             upsert=True
         )
+
+    async def toggle_premium_channel(self, chat_id):
+        channel = await self.channels.find_one({"chat_id": chat_id})
+        if not channel: return False
+        
+        is_premium = not channel.get("is_premium", False)
+        await self.channels.update_one(
+            {"chat_id": chat_id},
+            {"$set": {"is_premium": is_premium}}
+        )
+        return is_premium
 
     async def remove_channel(self, chat_id):
         await self.channels.delete_one({"chat_id": chat_id})
@@ -157,6 +169,20 @@ class Database:
             {"$set": {"preferred_channel": channel_id_str}},
             upsert=True
         )
+        
+    async def add_premium_user(self, user_id):
+        await self.premium_users.update_one(
+            {"user_id": user_id},
+            {"$set": {"user_id": user_id}},
+            upsert=True
+        )
+
+    async def remove_premium_user(self, user_id):
+        await self.premium_users.delete_one({"user_id": user_id})
+
+    async def is_premium_user(self, user_id):
+        doc = await self.premium_users.find_one({"user_id": user_id})
+        return doc is not None
 
 _dbs = {}
 def get_db(bot_id=None):

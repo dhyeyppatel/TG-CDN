@@ -47,10 +47,21 @@ async def core_send_media(bot, chat_id, specific_channel_id=None, is_prev=False)
     if not channels:
         return False, "📭 No storage channels found yet! Use /settings to add one."
         
+    is_premium = await db.is_premium_user(chat_id)
+
     if specific_channel_id:
         channels = [c for c in channels if c["chat_id"] == specific_channel_id]
         if not channels:
             return False, "This specific channel is no longer tracked."
+            
+        if channels[0].get("is_premium") and not is_premium:
+            return False, "💎 *Premium Content*\nYou need a premium subscription to access this specific channel."
+    else:
+        # Filter channels based on premium status
+        if not is_premium:
+            channels = [c for c in channels if not c.get("is_premium")]
+        if not channels:
+            return False, "📭 No free channels available. All content is premium-only."
 
     autodelete_mins = await db.get_setting("autodelete_minutes", 5)
     autodelete_secs = autodelete_mins * 60
@@ -230,7 +241,11 @@ async def type_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for c in channels:
         name = c.get('title', 'Unknown Channel')
-        keyboard.append([InlineKeyboardButton(f"📁 {name}", callback_data=f"set_type_{c['chat_id']}")])
+        if c.get("is_premium"):
+            name = f"💎 {name}"
+        else:
+            name = f"📁 {name}"
+        keyboard.append([InlineKeyboardButton(name, callback_data=f"set_type_{c['chat_id']}")])
         
     keyboard.append([InlineKeyboardButton("🎲 All Channels (Mix)", callback_data="set_type_all")])
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -457,6 +472,22 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await db.set_setting("admin_state", None)
                 await update.message.reply_text(f"✅ FSUB Link updated to: {text}\nSend /settings to view changes.")
                 return
+            elif state == "wait_add_prem":
+                if text.isdigit():
+                    await db.add_premium_user(int(text))
+                    await db.set_setting("admin_state", None)
+                    await update.message.reply_text(f"✅ User `{text}` has been granted premium access!", parse_mode="Markdown")
+                else:
+                    await update.message.reply_text("❌ Please send a valid user ID (numbers only).")
+                return
+            elif state == "wait_rm_prem":
+                if text.isdigit():
+                    await db.remove_premium_user(int(text))
+                    await db.set_setting("admin_state", None)
+                    await update.message.reply_text(f"❌ User `{text}`'s premium access has been revoked.", parse_mode="Markdown")
+                else:
+                    await update.message.reply_text("❌ Please send a valid user ID (numbers only).")
+                return
             elif state == "wait_archive_days":
                 if text.isdigit():
                     await db.set_setting("archive_days", int(text))
@@ -549,6 +580,7 @@ async def render_settings_main(target):
         [InlineKeyboardButton("📡 Channels Setup", callback_data="menu_channels")],
         [InlineKeyboardButton("⏱ Timers & Limits", callback_data="menu_timers")],
         [InlineKeyboardButton("🔀 Toggles", callback_data="menu_toggles")],
+        [InlineKeyboardButton("💎 Premium System", callback_data="menu_premium")],
         [InlineKeyboardButton("📈 DB Stats", callback_data="settings_stats")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -558,6 +590,16 @@ async def render_settings_main(target):
         await target.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
     else:
         await target.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+async def render_menu_premium(query):
+    db = get_db(query.message.get_bot().id)
+    keyboard = [
+        [InlineKeyboardButton("➕ Add Premium User", callback_data="prompt_add_prem")],
+        [InlineKeyboardButton("➖ Remove Premium User", callback_data="prompt_rm_prem")],
+        [InlineKeyboardButton("👑 Premium Channels", callback_data="settings_prem_channels")],
+        [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
+    ]
+    await query.edit_message_text("💎 *Premium System*\n\nManage premium users and premium exclusive channels.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def render_menu_channels(query):
     db = get_db(query.message.get_bot().id)
@@ -649,6 +691,34 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await render_menu_timers(query)
     elif query.data == "menu_toggles":
         await render_menu_toggles(query)
+    elif query.data == "menu_premium":
+        await render_menu_premium(query)
+    elif query.data == "prompt_add_prem":
+        await db.set_setting("admin_state", "wait_add_prem")
+        await query.edit_message_text("➕ Send me the User ID of the user you want to grant Premium access:")
+    elif query.data == "prompt_rm_prem":
+        await db.set_setting("admin_state", "wait_rm_prem")
+        await query.edit_message_text("➖ Send me the User ID of the user you want to revoke Premium access from:")
+    elif query.data == "settings_prem_channels":
+        channels = await db.get_all_channels()
+        keyboard = []
+        if not channels:
+            text = "📭 No active storage channels are currently tracked."
+        else:
+            text = "👑 *Premium Channels Setup:*\n\n_Click on a channel to toggle its premium status. Premium channels are ONLY accessible by Premium Users._\n\n"
+            for c in channels:
+                title = c.get('title', 'Unknown')
+                status = "💎 (Premium)" if c.get("is_premium") else "🆓 (Free)"
+                keyboard.append([InlineKeyboardButton(f"{status} {title}", callback_data=f"toggle_prem_{c['chat_id']}")])
+                
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu_premium")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    elif query.data.startswith("toggle_prem_"):
+        chat_id = int(query.data.split("_")[2])
+        await db.toggle_premium_channel(chat_id)
+        query.data = "settings_prem_channels"
+        await settings_callback(update, context)
         
     elif query.data == "toggle_delivery":
         delivery = await db.get_setting("delivery_mode", "random")
