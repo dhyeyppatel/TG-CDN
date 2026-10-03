@@ -287,11 +287,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             title = "Channel"
             msg_id = 1
             
-            if update.message.forward_origin and getattr(update.message.forward_origin, "type", "") == "channel":
+            if update.message.forward_origin and hasattr(update.message.forward_origin, "chat"):
                 chat_id = update.message.forward_origin.chat.id
                 title = update.message.forward_origin.chat.title
                 msg_id = update.message.forward_origin.message_id
-            elif update.message.forward_from_chat and getattr(update.message.forward_from_chat, "type", "") == "channel":
+            elif update.message.forward_from_chat:
                 chat_id = update.message.forward_from_chat.id
                 title = update.message.forward_from_chat.title
                 msg_id = update.message.forward_from_message_id

@@ -22,8 +22,8 @@ def create_app():
     app.add_handler(CommandHandler("settings", settings_handler))
     app.add_handler(CallbackQueryHandler(settings_callback))
     
-    # Listen for button presses in PM
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    # Listen for button presses and forwards in PM
+    app.add_handler(MessageHandler(~filters.COMMAND, message_handler))
     
     # Listen for new reactions in Early Access Chat (Works for both Private and Channels)
     app.add_handler(TypeHandler(Update, reaction_handler))
