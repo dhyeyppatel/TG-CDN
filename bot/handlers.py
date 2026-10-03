@@ -298,7 +298,10 @@ async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ref_count = await db.get_referral_count(update.effective_user.id)
     text += f"2. **Refer Friends:** Share your invite link to earn Premium time per referral.\nYour link: `{ref_link}`\nYour Referrals: {ref_count}"
     
-    keyboard = [[InlineKeyboardButton("📺 Watch Ad for Premium", callback_data="gen_short_link")]]
+    keyboard = [
+        [InlineKeyboardButton("💰 Buy Premium", callback_data="buy_premium")],
+        [InlineKeyboardButton("📺 Watch Ad for Premium", callback_data="gen_short_link")]
+    ]
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown", disable_web_page_preview=True)
 
 async def send_random_media(update: Update, context: ContextTypes.DEFAULT_TYPE, is_prev=False):
@@ -544,13 +547,24 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("✅ Payment Instructions updated.")
                 return
             elif state == "wait_add_plan":
-                parts = text.split()
-                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                    await db.add_plan(int(parts[0]), int(parts[1]))
-                    await db.set_setting("admin_state", None)
-                    await update.message.reply_text(f"✅ Plan added: {parts[0]}/- for {parts[1]} days.")
+                lines = text.strip().split('\n')
+                added = []
+                for line in lines:
+                    parts = line.strip().split()
+                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                        await db.add_plan(int(parts[0]), int(parts[1]))
+                        added.append(f"{parts[0]}/- for {parts[1]} days")
+                
+                await db.set_setting("admin_state", None)
+                if added:
+                    await update.message.reply_text("✅ Added plans:\n" + "\n".join(added))
                 else:
                     await update.message.reply_text("❌ Invalid format. Please send price and days (e.g. `29 3`).")
+                return
+            elif state == "wait_shortener_domain":
+                await db.set_setting("shortener_domain", text.strip())
+                await db.set_setting("admin_state", None)
+                await update.message.reply_text("✅ Shortener Domain saved.")
                 return
             elif state == "wait_shortener_api":
                 await db.set_setting("shortener_api", text.strip())
@@ -750,7 +764,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
     
-    # Allow set_type_ callbacks for all users
+    # Allow set_type_, buy_premium, gen_short_link callbacks for all users
     if query.data.startswith("set_type_"):
         await query.answer()
         chat_id_str = query.data.replace("set_type_", "")
@@ -762,6 +776,46 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target = next((c for c in channels if c["chat_id"] == int(chat_id_str)), None)
             name = target["title"] if target else "Specific Channel"
             await query.edit_message_text(f"✅ Media type set to: **{name}**", parse_mode="Markdown")
+        return
+        
+    if query.data == "buy_premium":
+        await query.answer()
+        plans = await db.get_plans()
+        payment_info = await db.get_setting("payment_info", "Contact admin to purchase.")
+        text = "👑 **Buy Premium**\n\n"
+        for p in plans:
+            text += f"- {p['price']}/- for {p['days']} days\n"
+        text += f"\n*Payment Info:*\n{payment_info}\n"
+        await query.edit_message_text(text, parse_mode="Markdown")
+        return
+        
+    if query.data == "gen_short_link":
+        await query.answer()
+        api_token = await db.get_setting("shortener_api", None)
+        domain = await db.get_setting("shortener_domain", "earn4link.in")
+        if not api_token:
+            await query.answer("❌ Shortener API not configured.", show_alert=True)
+            return
+            
+        hash_str = f"prem_{uuid.uuid4().hex[:8]}"
+        bot_info = await context.bot.get_me()
+        destination_link = f"https://t.me/{bot_info.username}?start={hash_str}"
+        
+        api_url = f"https://{domain}/api?api={api_token}&url={urllib.parse.quote(destination_link)}&format=text"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api_url) as resp:
+                    short_url = await resp.text()
+                    
+            if "http" not in short_url:
+                raise Exception(f"Failed to shorten: {short_url}")
+                
+            await db.create_short_link(hash_str, query.from_user.id)
+            keyboard = [[InlineKeyboardButton("🔗 Open Link", url=short_url)]]
+            await query.edit_message_text(f"📺 Click the link below, watch the ad, and follow the instructions to claim your premium!", reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            logger.error(f"Shortener API Error: {e}")
+            await query.edit_message_text("❌ Error generating link.")
         return
     
     # All other callbacks require owner
@@ -818,11 +872,12 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         
     elif query.data == "settings_shortener":
+        domain = await db.get_setting("shortener_domain", "earn4link.in")
         api = await db.get_setting("shortener_api", "Not Set")
         days = await db.get_setting("shortener_duration_days", 1)
-        text = f"🔗 *Shortener API Settings*\n\n**Current API Key:** `{api}`\n**Reward:** `{days}` days\n\nUsers can watch ads on your shortener to get premium."
+        text = f"🔗 *Shortener API Settings*\n\n**Domain:** `{domain}`\n**Current API Key:** `{api}`\n**Reward:** `{days}` days\n\nUsers can watch ads on your shortener to get premium."
         keyboard = [
-            [InlineKeyboardButton("Set API Key", callback_data="prompt_shortener_api")],
+            [InlineKeyboardButton("Set Domain", callback_data="prompt_shortener_domain"), InlineKeyboardButton("Set API Key", callback_data="prompt_shortener_api")],
             [InlineKeyboardButton("Set Reward Days", callback_data="prompt_shortener_days")],
             [InlineKeyboardButton("🔙 Back", callback_data="menu_premium")]
         ]
@@ -858,32 +913,9 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await db.set_setting("admin_state", "wait_ref_days")
         await query.edit_message_text("👥 Send the referral reward duration in days (e.g. `1`):")
         
-    elif query.data == "gen_short_link":
-        api_token = await db.get_setting("shortener_api", None)
-        if not api_token:
-            await query.answer("❌ Shortener API not configured by admin.", show_alert=True)
-            return
-            
-        hash_str = f"prem_{uuid.uuid4().hex[:8]}"
-        bot_info = await context.bot.get_me()
-        destination_link = f"https://t.me/{bot_info.username}?start={hash_str}"
-        
-        api_url = f"https://earn4link.in/api?api={api_token}&url={urllib.parse.quote(destination_link)}&format=text"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(api_url) as resp:
-                    short_url = await resp.text()
-                    
-            if "earn4link" not in short_url and "http" not in short_url:
-                raise Exception("Failed to shorten")
-                
-            await db.create_short_link(hash_str, query.from_user.id)
-            keyboard = [[InlineKeyboardButton("🔗 Open Link", url=short_url)]]
-            await query.edit_message_text(f"📺 Click the link below, watch the ad, and follow the instructions to claim your premium!", reply_markup=InlineKeyboardMarkup(keyboard))
-        except Exception as e:
-            logger.error(f"Shortener API Error: {e}")
-            await query.answer("❌ Error generating link.", show_alert=True)
-        return
+    elif query.data == "prompt_shortener_domain":
+        await db.set_setting("admin_state", "wait_shortener_domain")
+        await query.edit_message_text("🔗 Send your Shortener API Domain (e.g. `earn4link.in`):")
         
     elif query.data == "toggle_delivery":
         delivery = await db.get_setting("delivery_mode", "random")
