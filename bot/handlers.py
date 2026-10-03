@@ -485,13 +485,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg_id = 1
             
             if update.message.forward_origin and hasattr(update.message.forward_origin, "chat"):
-                chat_id = update.message.forward_origin.chat.id
-                title = update.message.forward_origin.chat.title
-                msg_id = update.message.forward_origin.message_id
+                chat_id = getattr(update.message.forward_origin.chat, "id", None)
+                title = getattr(update.message.forward_origin.chat, "title", "Channel")
+                msg_id = getattr(update.message.forward_origin, "message_id", 1)
             elif update.message.forward_from_chat:
                 chat_id = update.message.forward_from_chat.id
-                title = update.message.forward_from_chat.title
-                msg_id = update.message.forward_from_message_id
+                title = getattr(update.message.forward_from_chat, "title", "Channel")
+                msg_id = getattr(update.message, "forward_from_message_id", 1)
             elif update.message.text:
                 text = update.message.text.strip()
                 if text.startswith("-100") and text.replace("-", "").isdigit():

@@ -1,5 +1,6 @@
 import motor.motor_asyncio
 import time
+import os
 from bot.config import Config
 import random
 import logging
@@ -160,5 +161,7 @@ class Database:
 _dbs = {}
 def get_db(bot_id=None):
     if bot_id not in _dbs:
-        _dbs[bot_id] = Database(Config.MONGODB_URI, Config.DATABASE_NAME, bot_id)
+        # Get MONGODB_URI directly from env if Config.MONGODB_URI is not ready yet
+        uri = Config.MONGODB_URI if hasattr(Config, 'MONGODB_URI') else os.environ.get("MONGODB_URI")
+        _dbs[bot_id] = Database(uri, Config.DATABASE_NAME, bot_id)
     return _dbs[bot_id]
