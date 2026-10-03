@@ -701,7 +701,22 @@ async def render_menu_premium(query):
         [InlineKeyboardButton("💳 Payment Info", callback_data="prompt_pay_info")],
         [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
     ]
-    await query.edit_message_text("💸 *Monetization & Premium*\n\nManage users, plans, and reward settings.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    plans = await db.get_plans()
+    pay_info = await db.get_setting("payment_info", "Not Set")
+    s_domain = await db.get_setting("shortener_domain", "earn4link.in")
+    s_api = await db.get_setting("shortener_api", "Not Set")
+    s_days = await db.get_setting("shortener_duration_days", 1)
+    r_days = await db.get_setting("referral_duration_days", 1)
+    
+    text = f"💸 *Monetization & Premium*\n\n"
+    text += f"**💰 Active Plans:** `{len(plans)}`\n"
+    text += f"**💳 Payment Info:** `{pay_info[:20]}...`\n"
+    text += f"**🔗 Shortener API:** `{s_api[:8]}...` (`{s_domain}`)\n"
+    text += f"**🎁 Shortener Reward:** `{s_days} Days`\n"
+    text += f"**👥 Referral Reward:** `{r_days} Days`\n\n"
+    text += "Manage users, plans, and reward settings below:"
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def render_menu_channels(query):
     db = get_db(query.message.get_bot().id)
@@ -825,7 +840,14 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     await query.answer()
     
+    cancel_kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_admin_state")]])
+    
     if query.data == "settings_main":
+        await render_settings_main(query)
+    elif query.data == "cancel_admin_state":
+        await db.set_setting("admin_state", None)
+        await query.answer("Canceled.", show_alert=False)
+        query.data = "settings_main"
         await render_settings_main(query)
     elif query.data == "menu_channels":
         await render_menu_channels(query)
@@ -837,10 +859,10 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await render_menu_premium(query)
     elif query.data == "prompt_add_prem":
         await db.set_setting("admin_state", "wait_add_prem")
-        await query.edit_message_text("➕ Send me the User ID and duration in days (e.g. `123456789 3` for 3 days):")
+        await query.edit_message_text("➕ Send me the User ID and duration in days (e.g. `123456789 3` for 3 days):", reply_markup=cancel_kb)
     elif query.data == "prompt_rm_prem":
         await db.set_setting("admin_state", "wait_rm_prem")
-        await query.edit_message_text("➖ Send me the User ID of the user you want to revoke Premium access from:")
+        await query.edit_message_text("➖ Send me the User ID of the user you want to revoke Premium access from:", reply_markup=cancel_kb)
     elif query.data == "settings_prem_channels":
         channels = await db.get_all_channels()
         keyboard = []
@@ -895,10 +917,10 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "prompt_pay_info":
         await db.set_setting("admin_state", "wait_pay_info")
         current = await db.get_setting("payment_info", "Not Set")
-        await query.edit_message_text(f"💳 *Payment Instructions*\n\n**Current:**\n`{current}`\n\nSend the Payment Instructions text to display to users:", parse_mode="Markdown")
+        await query.edit_message_text(f"💳 *Payment Instructions*\n\n**Current:**\n`{current}`\n\nSend the Payment Instructions text to display to users:", parse_mode="Markdown", reply_markup=cancel_kb)
     elif query.data == "prompt_add_plan":
         await db.set_setting("admin_state", "wait_add_plan")
-        await query.edit_message_text("💰 Send the plan details in this format: `PRICE DAYS`\nExample (29/- for 3 days): `29 3`\n\n_You can send multiple plans on separate lines._", parse_mode="Markdown")
+        await query.edit_message_text("💰 Send the plan details in this format: `PRICE DAYS`\nExample (29/- for 3 days): `29 3`\n\n_You can send multiple plans on separate lines._", parse_mode="Markdown", reply_markup=cancel_kb)
     elif query.data.startswith("rm_plan_"):
         plan_id = query.data.replace("rm_plan_", "")
         await db.remove_plan(plan_id)
@@ -907,20 +929,20 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "prompt_shortener_api":
         await db.set_setting("admin_state", "wait_shortener_api")
         current = await db.get_setting("shortener_api", "Not Set")
-        await query.edit_message_text(f"🔗 *Shortener API Token*\n\n**Current:** `{current}`\n\nSend your Earn4link (or compatible) API Token:", parse_mode="Markdown")
+        await query.edit_message_text(f"🔗 *Shortener API Token*\n\n**Current:** `{current}`\n\nSend your Earn4link (or compatible) API Token:", parse_mode="Markdown", reply_markup=cancel_kb)
     elif query.data == "prompt_shortener_days":
         await db.set_setting("admin_state", "wait_shortener_days")
         current = await db.get_setting("shortener_duration_days", 1)
-        await query.edit_message_text(f"🔗 *Shortener Reward Days*\n\n**Current:** `{current}`\n\nSend the reward duration in days (e.g. `1`):", parse_mode="Markdown")
+        await query.edit_message_text(f"🔗 *Shortener Reward Days*\n\n**Current:** `{current}`\n\nSend the reward duration in days (e.g. `1`):", parse_mode="Markdown", reply_markup=cancel_kb)
     elif query.data == "prompt_ref_days":
         await db.set_setting("admin_state", "wait_ref_days")
         current = await db.get_setting("referral_duration_days", 1)
-        await query.edit_message_text(f"👥 *Referral Reward Days*\n\n**Current:** `{current}`\n\nSend the referral reward duration in days (e.g. `1`):", parse_mode="Markdown")
+        await query.edit_message_text(f"👥 *Referral Reward Days*\n\n**Current:** `{current}`\n\nSend the referral reward duration in days (e.g. `1`):", parse_mode="Markdown", reply_markup=cancel_kb)
         
     elif query.data == "prompt_shortener_domain":
         await db.set_setting("admin_state", "wait_shortener_domain")
         current = await db.get_setting("shortener_domain", "earn4link.in")
-        await query.edit_message_text(f"🔗 *Shortener API Domain*\n\n**Current:** `{current}`\n\nSend your Shortener API Domain (e.g. `earn4link.in`):", parse_mode="Markdown")
+        await query.edit_message_text(f"🔗 *Shortener API Domain*\n\n**Current:** `{current}`\n\nSend your Shortener API Domain (e.g. `earn4link.in`):", parse_mode="Markdown", reply_markup=cancel_kb)
         
     elif query.data == "toggle_delivery":
         delivery = await db.get_setting("delivery_mode", "random")
@@ -982,11 +1004,13 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     elif query.data == "prompt_fsub_link":
         await db.set_setting("admin_state", "wait_fsub_link")
-        await query.edit_message_text("🔗 Send me the new FSUB channel link (e.g., https://t.me/joinchat/...)")
+        keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_state")]]
+        await query.edit_message_text("🔗 Send me the new FSUB channel link (e.g., https://t.me/joinchat/...)", reply_markup=InlineKeyboardMarkup(keyboard))
         
     elif query.data == "prompt_archive_days":
         await db.set_setting("admin_state", "wait_archive_days")
-        await query.edit_message_text("📅 Send me the new Archive Time in days (e.g., 3)")
+        keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_state")]]
+        await query.edit_message_text("📅 Send me the new Archive Time in days (e.g., 3)", reply_markup=InlineKeyboardMarkup(keyboard))
         
     elif query.data == "rm_fsub_id":
         await db.set_setting("fsub_channel_id", "")
