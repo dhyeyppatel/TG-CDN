@@ -247,7 +247,10 @@ async def toggle_autosend(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 0. Handle Admin States
-    if Config.OWNER_ID and update.effective_user.id == Config.OWNER_ID:
+    if not Config.OWNER_ID:
+        return
+        
+    if update.effective_user.id == Config.OWNER_ID:
         state = await db.get_setting("admin_state", None)
         if state and update.message and update.message.text:
             text = update.message.text
@@ -323,6 +326,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await db.set_setting("archive_channel_id", chat_id)
                     await update.message.reply_text(f"✅ Archive Channel has been set to ID: {chat_id}")
                     await db.set_setting("admin_state", None)
+                return
+            else:
+                await update.message.reply_text("❌ Invalid format. Please forward a valid message from a channel, or type a raw channel ID (e.g., `-1001234567890`).", parse_mode="Markdown")
                 return
 
 
@@ -448,7 +454,7 @@ async def render_menu_toggles(query):
     await query.edit_message_text("⚙️ *Toggles*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if Config.OWNER_ID and update.effective_user.id != Config.OWNER_ID:
+    if not Config.OWNER_ID or update.effective_user.id != Config.OWNER_ID:
         await update.message.reply_text("You are not authorized to use this command.")
         return
         
@@ -456,7 +462,7 @@ async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if Config.OWNER_ID and query.from_user.id != Config.OWNER_ID:
+    if not Config.OWNER_ID or query.from_user.id != Config.OWNER_ID:
         await query.answer("Unauthorized.", show_alert=True)
         return
         
