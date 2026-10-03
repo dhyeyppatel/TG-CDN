@@ -37,11 +37,43 @@ async def type_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
+    
+    # Handle ?start=cdn
+    if context.args and len(context.args) > 0 and context.args[0] == "cdn":
+        clone_mode = await db.get_setting("clone_mode", True)
+        owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
+        if not clone_mode and update.effective_user.id != owner_id:
+            await update.message.reply_text("❌ Clone mode is currently disabled by the owner.")
+            return
+            
+        await update.message.reply_text(
+            "🚀 *Welcome to the Bot Cloner!* 🚀\n\n"
+            "To clone this bot for your own use, follow these steps:\n"
+            "1. Go to @BotFather and create a new bot.\n"
+            "2. Copy the HTTP API Token provided by BotFather.\n"
+            "3. Send it to me in the following format:\n\n"
+            "`/clone YOUR_BOT_TOKEN_HERE`\n\n"
+            "Once cloned, your bot will run autonomously exactly like this one!",
+            parse_mode="Markdown"
+        )
+        return
+        
     reply_markup = await get_main_keyboard(context.bot.id)
-    await update.message.reply_text(
-        "Welcome!\n\nUse the buttons below to browse media, or use /type to select your preferred category.",
-        reply_markup=reply_markup
+    bot_info = await context.bot.get_me()
+    
+    welcome_text = (
+        f"✨ *Welcome to {bot_info.first_name}!* ✨\n\n"
+        "Here to serve you the best media seamlessly. 🚀\n\n"
+        "Use the buttons below to browse, or send /type to filter by specific categories."
     )
+    
+    clone_mode = await db.get_setting("clone_mode", True)
+    if clone_mode:
+        inline_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🤖 Create your own Clone", url=f"https://t.me/{bot_info.username}?start=cdn")]])
+        await update.message.reply_text(welcome_text, reply_markup=inline_kb, parse_mode="Markdown")
+        await update.message.reply_text("👇 Choose an option below:", reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
 async def check_fsub(bot, user_id):
     db = get_db(bot.id)
     fsub_enabled = await db.get_setting("fsub_enabled", False)
@@ -290,7 +322,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id == owner_id:
         state = await db.get_setting("admin_state", None)
         if state and update.message and update.message.text:
-            text = update.message.text
+            clone_mode = await db.get_setting("clone_mode", True)
+    if not clone_mode and update.effective_user.id != (await db.get_setting("owner_id", Config.OWNER_ID)):
+        await update.message.reply_text("? Clone mode is currently disabled by the owner.")
+        return
+
+    text = update.message.text
             if state == "wait_fsub_link":
                 await db.set_setting("fsub_channel_link", text)
                 await db.set_setting("admin_state", None)
@@ -336,7 +373,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 title = update.message.forward_from_chat.title
                 msg_id = update.message.forward_from_message_id
             elif update.message.text:
-                text = update.message.text.strip()
+                clone_mode = await db.get_setting("clone_mode", True)
+    if not clone_mode and update.effective_user.id != (await db.get_setting("owner_id", Config.OWNER_ID)):
+        await update.message.reply_text("? Clone mode is currently disabled by the owner.")
+        return
+
+    text = update.message.text.strip()
                 if text.startswith("-100") and text.replace("-", "").isdigit():
                     chat_id = int(text)
                     title = "Manual Channel"
@@ -372,7 +414,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 2. Handle standard text buttons
     if update.message and update.message.text:
-        text = update.message.text
+        clone_mode = await db.get_setting("clone_mode", True)
+    if not clone_mode and update.effective_user.id != (await db.get_setting("owner_id", Config.OWNER_ID)):
+        await update.message.reply_text("? Clone mode is currently disabled by the owner.")
+        return
+
+    text = update.message.text
         if text in ["Next ⏩", "/next"]:
             await send_random_media(update, context, is_prev=False)
         elif text in ["Prev ⏪", "/prev"]:
@@ -538,6 +585,11 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Force sub toggled!", show_alert=False)
         await render_menu_toggles(query)
         
+    elif query.data == "toggle_clone_mode":
+        current = await db.get_setting("clone_mode", True)
+        await db.set_setting("clone_mode", not current)
+        await render_menu_toggles(query)
+
     elif query.data == "toggle_mode":
         mode = await db.get_setting("bot_mode", "default")
         new_mode = "early_access" if mode == "default" else "default"
@@ -713,6 +765,11 @@ from telegram import Bot
 
 async def clone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
+    clone_mode = await db.get_setting("clone_mode", True)
+    if not clone_mode and update.effective_user.id != (await db.get_setting("owner_id", Config.OWNER_ID)):
+        await update.message.reply_text("? Clone mode is currently disabled by the owner.")
+        return
+
     text = update.message.text
     parts = text.split(maxsplit=1)
     if len(parts) < 2:
