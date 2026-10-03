@@ -57,12 +57,12 @@ async def vercel_cron():
     tokens = list(set(tokens)) # deduplicate
     
     current_time = int(time.time())
-    total_deletions = 0
-    total_sent = 0
     
     from bot.handlers import core_send_media, core_send_early_access_media
     
-    for token in tokens:
+    async def process_bot(token):
+        deletions_count = 0
+        sent_count = 0
         try:
             tg_app = await get_tg_app(token)
             bot = tg_app.bot
@@ -76,7 +76,7 @@ async def vercel_cron():
                 except Exception:
                     pass
                 await db.remove_deletion(doc["_id"])
-                total_deletions += 1
+                deletions_count += 1
                 
             # 2. Process Early Access Archiving
             archive_days = await db.get_setting("archive_days", 3)
@@ -108,7 +108,7 @@ async def vercel_cron():
                     try:
                         await bot.send_message(
                             chat_id=sub["chat_id"], 
-                            text="? *Your auto-send session has expired!*\nAuto-send is now turned off.",
+                            text="⏳ *Your auto-send session has expired!*\nAuto-send is now turned off.",
                             parse_mode="Markdown"
                         )
                     except Exception:
@@ -118,11 +118,19 @@ async def vercel_cron():
                         await core_send_early_access_media(bot, sub["chat_id"])
                     else:
                         await core_send_media(bot, sub["chat_id"])
-                    total_sent += 1
+                    sent_count += 1
         except Exception as e:
             print(f"Cron error for bot {token[-5:]}: {e}")
             
-    return {"status": "Cron executed successfully", "deleted": total_deletions, "sent": total_sent}
+        return deletions_count, sent_count
+
+    # Run cron for all bots simultaneously
+    results = await asyncio.gather(*(process_bot(t) for t in tokens))
+    
+    total_deletions = sum(r[0] for r in results)
+    total_sent = sum(r[1] for r in results)
+            
+    return {"status": "Cron executed successfully", "bots_processed": len(tokens), "deleted": total_deletions, "sent": total_sent}
 
 @app.get("/")
 def index():
