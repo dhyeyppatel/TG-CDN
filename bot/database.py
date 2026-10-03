@@ -19,8 +19,10 @@ class Database:
         self.subscribers = self.db[f"{prefix}subscribers"]
         self.pending_deletions = self.db[f"{prefix}pending_deletions"]
         self.media_groups = self.db[f"{prefix}media_groups"]
-        self.user_progress = self.db[f"{prefix}user_progress"]
         self.premium_users = self.db[f"{prefix}premium_users"]
+        self.plans = self.db[f"{prefix}plans"]
+        self.shortener_links = self.db[f"{prefix}shortener_links"]
+        self.referrals = self.db[f"{prefix}referrals"]
         self.bot_registry = self.db["bot_registry"]
 
     async def update_channel(self, chat_id, title, message_id):
@@ -170,10 +172,17 @@ class Database:
             upsert=True
         )
         
-    async def add_premium_user(self, user_id):
+    async def add_premium_user(self, user_id, days):
+        doc = await self.premium_users.find_one({"user_id": user_id})
+        current_time = time.time()
+        if doc and doc.get("expires_at", 0) > current_time:
+            new_expires = doc["expires_at"] + (days * 86400)
+        else:
+            new_expires = current_time + (days * 86400)
+            
         await self.premium_users.update_one(
             {"user_id": user_id},
-            {"$set": {"user_id": user_id}},
+            {"$set": {"user_id": user_id, "expires_at": new_expires}},
             upsert=True
         )
 
@@ -182,7 +191,50 @@ class Database:
 
     async def is_premium_user(self, user_id):
         doc = await self.premium_users.find_one({"user_id": user_id})
-        return doc is not None
+        if doc:
+            expires_at = doc.get("expires_at", 0)
+            if expires_at > time.time():
+                return True
+        return False
+        
+    async def get_plans(self):
+        return await self.plans.find({}).to_list(length=None)
+
+    async def add_plan(self, price, days):
+        plan_id = f"{price}_{days}"
+        await self.plans.update_one(
+            {"_id": plan_id},
+            {"$set": {"price": price, "days": days}},
+            upsert=True
+        )
+        
+    async def remove_plan(self, plan_id):
+        await self.plans.delete_one({"_id": plan_id})
+
+    async def create_short_link(self, hash_str, user_id):
+        await self.shortener_links.insert_one({
+            "hash": hash_str,
+            "user_id": user_id,
+            "created_at": time.time(),
+            "used": False
+        })
+        
+    async def verify_short_link(self, hash_str, user_id):
+        doc = await self.shortener_links.find_one({"hash": hash_str, "user_id": user_id, "used": False})
+        if doc:
+            await self.shortener_links.update_one({"_id": doc["_id"]}, {"$set": {"used": True}})
+            return True
+        return False
+        
+    async def add_referral(self, referrer_id, new_user_id):
+        existing = await self.referrals.find_one({"new_user_id": new_user_id})
+        if not existing:
+            await self.referrals.insert_one({"referrer_id": referrer_id, "new_user_id": new_user_id, "date": time.time()})
+            return True
+        return False
+        
+    async def get_referral_count(self, user_id):
+        return await self.referrals.count_documents({"referrer_id": user_id})
 
 _dbs = {}
 def get_db(bot_id=None):

@@ -1,6 +1,9 @@
 import random
 import logging
 import time
+import uuid
+import urllib.parse
+import aiohttp
 from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
@@ -191,25 +194,44 @@ async def core_send_early_access_media(bot, chat_id):
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
     
-    # Handle ?start=cdn deep link
-    if context.args and context.args[0] == "cdn":
-        clone_mode = await db.get_setting("clone_mode", True)
-        owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
-        if not clone_mode and update.effective_user.id != owner_id:
-            await update.message.reply_text("❌ Clone mode is currently disabled by the owner.")
+    # Handle deep links
+    if context.args:
+        arg = context.args[0]
+        if arg == "cdn":
+            clone_mode = await db.get_setting("clone_mode", True)
+            owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
+            if not clone_mode and update.effective_user.id != owner_id:
+                await update.message.reply_text("❌ Clone mode is currently disabled by the owner.")
+                return
+                
+            await update.message.reply_text(
+                "🚀 *Welcome to the Bot Cloner!*\n\n"
+                "To clone this bot for your own use:\n\n"
+                "1️⃣ Go to @BotFather and create a new bot\n"
+                "2️⃣ Copy the HTTP API Token\n"
+                "3️⃣ Send it here in this format:\n\n"
+                "`/clone YOUR_BOT_TOKEN_HERE`\n\n"
+                "✨ Once cloned, your bot will run autonomously!",
+                parse_mode="Markdown"
+            )
             return
-            
-        await update.message.reply_text(
-            "🚀 *Welcome to the Bot Cloner!*\n\n"
-            "To clone this bot for your own use:\n\n"
-            "1️⃣ Go to @BotFather and create a new bot\n"
-            "2️⃣ Copy the HTTP API Token\n"
-            "3️⃣ Send it here in this format:\n\n"
-            "`/clone YOUR_BOT_TOKEN_HERE`\n\n"
-            "✨ Once cloned, your bot will run autonomously!",
-            parse_mode="Markdown"
-        )
-        return
+        elif arg.startswith("prem_"):
+            if await db.verify_short_link(arg, update.effective_user.id):
+                days = await db.get_setting("shortener_duration_days", 1)
+                await db.add_premium_user(update.effective_user.id, days)
+                await update.message.reply_text(f"🎉 **Congratulations!** You've claimed {days} days of Premium access by watching the ad!", parse_mode="Markdown")
+            else:
+                await update.message.reply_text("❌ This link is invalid, already used, or does not belong to you.")
+        elif arg.startswith("ref_"):
+            referrer_id = int(arg.split("_")[1])
+            if referrer_id != update.effective_user.id:
+                if await db.add_referral(referrer_id, update.effective_user.id):
+                    days = await db.get_setting("referral_duration_days", 1)
+                    await db.add_premium_user(referrer_id, days)
+                    try:
+                        await context.bot.send_message(chat_id=referrer_id, text=f"🎉 **New Referral!** Someone used your invite link. You've earned {days} days of Premium access!")
+                    except Exception:
+                        pass
         
     reply_markup = await get_main_keyboard(context.bot.id)
     bot_info = await context.bot.get_me()
@@ -251,6 +273,33 @@ async def type_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text("📂 *Select your preferred media type:*", reply_markup=reply_markup, parse_mode="Markdown")
+
+async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = get_db(context.bot.id)
+    bot_info = await context.bot.get_me()
+    
+    is_prem = await db.is_premium_user(update.effective_user.id)
+    status = "✅ ACTIVE" if is_prem else "❌ INACTIVE"
+    
+    plans = await db.get_plans()
+    payment_info = await db.get_setting("payment_info", "Contact admin to purchase.")
+    
+    text = f"💎 **Premium Subscription**\n\nYour Status: {status}\n\n"
+    text += "👑 **Buy Premium**\n"
+    for p in plans:
+        text += f"- {p['price']}/- for {p['days']} days\n"
+    if plans:
+        text += f"\n*Payment Info:*\n{payment_info}\n\n"
+        
+    text += "🎁 **Get Premium for FREE!**\n"
+    text += "1. **Watch an Ad:** Click the button below to generate a short link. After viewing, you'll earn Premium time!\n\n"
+    
+    ref_link = f"https://t.me/{bot_info.username}?start=ref_{update.effective_user.id}"
+    ref_count = await db.get_referral_count(update.effective_user.id)
+    text += f"2. **Refer Friends:** Share your invite link to earn Premium time per referral.\nYour link: `{ref_link}`\nYour Referrals: {ref_count}"
+    
+    keyboard = [[InlineKeyboardButton("📺 Watch Ad for Premium", callback_data="gen_short_link")]]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown", disable_web_page_preview=True)
 
 async def send_random_media(update: Update, context: ContextTypes.DEFAULT_TYPE, is_prev=False):
     db = get_db(context.bot.id)
@@ -473,12 +522,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"✅ FSUB Link updated to: {text}\nSend /settings to view changes.")
                 return
             elif state == "wait_add_prem":
-                if text.isdigit():
-                    await db.add_premium_user(int(text))
+                parts = text.split()
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    await db.add_premium_user(int(parts[0]), int(parts[1]))
                     await db.set_setting("admin_state", None)
-                    await update.message.reply_text(f"✅ User `{text}` has been granted premium access!", parse_mode="Markdown")
+                    await update.message.reply_text(f"✅ User `{parts[0]}` has been granted premium access for {parts[1]} days!", parse_mode="Markdown")
                 else:
-                    await update.message.reply_text("❌ Please send a valid user ID (numbers only).")
+                    await update.message.reply_text("❌ Invalid format. Please send ID and days (e.g. `123456789 3`).")
                 return
             elif state == "wait_rm_prem":
                 if text.isdigit():
@@ -487,6 +537,41 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(f"❌ User `{text}`'s premium access has been revoked.", parse_mode="Markdown")
                 else:
                     await update.message.reply_text("❌ Please send a valid user ID (numbers only).")
+                return
+            elif state == "wait_pay_info":
+                await db.set_setting("payment_info", text)
+                await db.set_setting("admin_state", None)
+                await update.message.reply_text("✅ Payment Instructions updated.")
+                return
+            elif state == "wait_add_plan":
+                parts = text.split()
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    await db.add_plan(int(parts[0]), int(parts[1]))
+                    await db.set_setting("admin_state", None)
+                    await update.message.reply_text(f"✅ Plan added: {parts[0]}/- for {parts[1]} days.")
+                else:
+                    await update.message.reply_text("❌ Invalid format. Please send price and days (e.g. `29 3`).")
+                return
+            elif state == "wait_shortener_api":
+                await db.set_setting("shortener_api", text.strip())
+                await db.set_setting("admin_state", None)
+                await update.message.reply_text("✅ Shortener API Key saved.")
+                return
+            elif state == "wait_shortener_days":
+                if text.isdigit():
+                    await db.set_setting("shortener_duration_days", int(text))
+                    await db.set_setting("admin_state", None)
+                    await update.message.reply_text(f"✅ Reward set to {text} days.")
+                else:
+                    await update.message.reply_text("❌ Send a valid number.")
+                return
+            elif state == "wait_ref_days":
+                if text.isdigit():
+                    await db.set_setting("referral_duration_days", int(text))
+                    await db.set_setting("admin_state", None)
+                    await update.message.reply_text(f"✅ Referral reward set to {text} days.")
+                else:
+                    await update.message.reply_text("❌ Send a valid number.")
                 return
             elif state == "wait_archive_days":
                 if text.isdigit():
@@ -580,7 +665,7 @@ async def render_settings_main(target):
         [InlineKeyboardButton("📡 Channels Setup", callback_data="menu_channels")],
         [InlineKeyboardButton("⏱ Timers & Limits", callback_data="menu_timers")],
         [InlineKeyboardButton("🔀 Toggles", callback_data="menu_toggles")],
-        [InlineKeyboardButton("💎 Premium System", callback_data="menu_premium")],
+        [InlineKeyboardButton("💸 Monetization & Premium", callback_data="menu_premium")],
         [InlineKeyboardButton("📈 DB Stats", callback_data="settings_stats")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -594,12 +679,15 @@ async def render_settings_main(target):
 async def render_menu_premium(query):
     db = get_db(query.message.get_bot().id)
     keyboard = [
-        [InlineKeyboardButton("➕ Add Premium User", callback_data="prompt_add_prem")],
-        [InlineKeyboardButton("➖ Remove Premium User", callback_data="prompt_rm_prem")],
+        [InlineKeyboardButton("➕ Add Premium User", callback_data="prompt_add_prem"), InlineKeyboardButton("➖ Rm User", callback_data="prompt_rm_prem")],
         [InlineKeyboardButton("👑 Premium Channels", callback_data="settings_prem_channels")],
+        [InlineKeyboardButton("💰 Premium Plans", callback_data="settings_prem_plans")],
+        [InlineKeyboardButton("🔗 Shortener Settings", callback_data="settings_shortener")],
+        [InlineKeyboardButton("👥 Referral Settings", callback_data="settings_referrals")],
+        [InlineKeyboardButton("💳 Payment Info", callback_data="prompt_pay_info")],
         [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
     ]
-    await query.edit_message_text("💎 *Premium System*\n\nManage premium users and premium exclusive channels.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await query.edit_message_text("💸 *Monetization & Premium*\n\nManage users, plans, and reward settings.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def render_menu_channels(query):
     db = get_db(query.message.get_bot().id)
@@ -695,7 +783,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await render_menu_premium(query)
     elif query.data == "prompt_add_prem":
         await db.set_setting("admin_state", "wait_add_prem")
-        await query.edit_message_text("➕ Send me the User ID of the user you want to grant Premium access:")
+        await query.edit_message_text("➕ Send me the User ID and duration in days (e.g. `123456789 3` for 3 days):")
     elif query.data == "prompt_rm_prem":
         await db.set_setting("admin_state", "wait_rm_prem")
         await query.edit_message_text("➖ Send me the User ID of the user you want to revoke Premium access from:")
@@ -719,6 +807,83 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await db.toggle_premium_channel(chat_id)
         query.data = "settings_prem_channels"
         await settings_callback(update, context)
+    elif query.data == "settings_prem_plans":
+        plans = await db.get_plans()
+        text = "💰 *Premium Plans*\n\n"
+        keyboard = [[InlineKeyboardButton("➕ Add New Plan", callback_data="prompt_add_plan")]]
+        for p in plans:
+            text += f"- {p['price']}/- for {p['days']} days\n"
+            keyboard.append([InlineKeyboardButton(f"❌ Remove {p['price']}/-", callback_data=f"rm_plan_{p['_id']}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu_premium")])
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        
+    elif query.data == "settings_shortener":
+        api = await db.get_setting("shortener_api", "Not Set")
+        days = await db.get_setting("shortener_duration_days", 1)
+        text = f"🔗 *Shortener API Settings*\n\n**Current API Key:** `{api}`\n**Reward:** `{days}` days\n\nUsers can watch ads on your shortener to get premium."
+        keyboard = [
+            [InlineKeyboardButton("Set API Key", callback_data="prompt_shortener_api")],
+            [InlineKeyboardButton("Set Reward Days", callback_data="prompt_shortener_days")],
+            [InlineKeyboardButton("🔙 Back", callback_data="menu_premium")]
+        ]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif query.data == "settings_referrals":
+        days = await db.get_setting("referral_duration_days", 1)
+        text = f"👥 *Referral Settings*\n\n**Reward:** `{days}` days per referral."
+        keyboard = [
+            [InlineKeyboardButton("Set Reward Days", callback_data="prompt_ref_days")],
+            [InlineKeyboardButton("🔙 Back", callback_data="menu_premium")]
+        ]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        
+    elif query.data == "prompt_pay_info":
+        await db.set_setting("admin_state", "wait_pay_info")
+        await query.edit_message_text("💳 Send the Payment Instructions text to display to users:")
+    elif query.data == "prompt_add_plan":
+        await db.set_setting("admin_state", "wait_add_plan")
+        await query.edit_message_text("💰 Send the plan details in this format: `PRICE DAYS`\nExample (29/- for 3 days): `29 3`")
+    elif query.data.startswith("rm_plan_"):
+        plan_id = query.data.replace("rm_plan_", "")
+        await db.remove_plan(plan_id)
+        query.data = "settings_prem_plans"
+        await settings_callback(update, context)
+    elif query.data == "prompt_shortener_api":
+        await db.set_setting("admin_state", "wait_shortener_api")
+        await query.edit_message_text("🔗 Send your Earn4link (or compatible) API Token:")
+    elif query.data == "prompt_shortener_days":
+        await db.set_setting("admin_state", "wait_shortener_days")
+        await query.edit_message_text("🔗 Send the reward duration in days (e.g. `1`):")
+    elif query.data == "prompt_ref_days":
+        await db.set_setting("admin_state", "wait_ref_days")
+        await query.edit_message_text("👥 Send the referral reward duration in days (e.g. `1`):")
+        
+    elif query.data == "gen_short_link":
+        api_token = await db.get_setting("shortener_api", None)
+        if not api_token:
+            await query.answer("❌ Shortener API not configured by admin.", show_alert=True)
+            return
+            
+        hash_str = f"prem_{uuid.uuid4().hex[:8]}"
+        bot_info = await context.bot.get_me()
+        destination_link = f"https://t.me/{bot_info.username}?start={hash_str}"
+        
+        api_url = f"https://earn4link.in/api?api={api_token}&url={urllib.parse.quote(destination_link)}&format=text"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api_url) as resp:
+                    short_url = await resp.text()
+                    
+            if "earn4link" not in short_url and "http" not in short_url:
+                raise Exception("Failed to shorten")
+                
+            await db.create_short_link(hash_str, query.from_user.id)
+            keyboard = [[InlineKeyboardButton("🔗 Open Link", url=short_url)]]
+            await query.edit_message_text(f"📺 Click the link below, watch the ad, and follow the instructions to claim your premium!", reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            logger.error(f"Shortener API Error: {e}")
+            await query.answer("❌ Error generating link.", show_alert=True)
+        return
         
     elif query.data == "toggle_delivery":
         delivery = await db.get_setting("delivery_mode", "random")
