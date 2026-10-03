@@ -282,11 +282,21 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
     # 1. Handle Channel Forwarding initialization (Admin Only)
-    if update.message and update.message.forward_origin and update.message.forward_origin.type == "channel":
-        if Config.OWNER_ID and update.effective_user.id == Config.OWNER_ID:
-            chat_id = update.message.forward_origin.chat.id
-            title = update.message.forward_origin.chat.title
-            msg_id = update.message.forward_origin.message_id
+    if update.message and Config.OWNER_ID and update.effective_user.id == Config.OWNER_ID:
+        forwarded_chat = None
+        forwarded_msg_id = None
+        
+        if update.message.forward_origin and getattr(update.message.forward_origin, "type", "") == "channel":
+            forwarded_chat = update.message.forward_origin.chat
+            forwarded_msg_id = update.message.forward_origin.message_id
+        elif update.message.forward_from_chat and update.message.forward_from_chat.type == "channel":
+            forwarded_chat = update.message.forward_from_chat
+            forwarded_msg_id = update.message.forward_from_message_id
+            
+        if forwarded_chat:
+            chat_id = forwarded_chat.id
+            title = forwarded_chat.title
+            msg_id = forwarded_msg_id
             
             keyboard = [
                 [InlineKeyboardButton("Add as Storage Channel", callback_data=f"fw_store_{chat_id}_{msg_id}")],
