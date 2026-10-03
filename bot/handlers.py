@@ -202,6 +202,10 @@ async def core_send_early_access_media(bot, chat_id):
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
     
+    if await db.is_user_banned(update.effective_user.id):
+        await update.message.reply_text("❌ You have been banned from using this bot.")
+        return
+    
     # Handle deep links
     if context.args:
         arg = context.args[0]
@@ -288,6 +292,46 @@ async def type_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text("📂 *Select your preferred media type:*", reply_markup=reply_markup, parse_mode="Markdown")
+
+async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = get_db(context.bot.id)
+    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
+    if update.effective_user.id != owner_id:
+        return
+        
+    if not context.args:
+        await update.message.reply_text("Usage: `/ban <user_id>`", parse_mode="Markdown")
+        return
+        
+    user_id_str = context.args[0]
+    if not user_id_str.isdigit():
+        await update.message.reply_text("❌ Please provide a valid numeric user ID.")
+        return
+        
+    user_id = int(user_id_str)
+    await db.set_user_banned(user_id, True)
+    await update.message.reply_text(f"✅ User `{user_id}` has been banned.", parse_mode="Markdown")
+    await send_log(context.bot, db, f"⛔ <b>User Banned</b>\nAdmin banned user <code>{user_id}</code>.")
+
+async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = get_db(context.bot.id)
+    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
+    if update.effective_user.id != owner_id:
+        return
+        
+    if not context.args:
+        await update.message.reply_text("Usage: `/unban <user_id>`", parse_mode="Markdown")
+        return
+        
+    user_id_str = context.args[0]
+    if not user_id_str.isdigit():
+        await update.message.reply_text("❌ Please provide a valid numeric user ID.")
+        return
+        
+    user_id = int(user_id_str)
+    await db.set_user_banned(user_id, False)
+    await update.message.reply_text(f"✅ User `{user_id}` has been unbanned.", parse_mode="Markdown")
+    await send_log(context.bot, db, f"✅ <b>User Unbanned</b>\nAdmin unbanned user <code>{user_id}</code>.")
 
 async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
@@ -684,6 +728,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Handle standard text buttons (all users)
     if update.message and update.message.text:
+        if await db.is_user_banned(update.effective_user.id):
+            return
+            
         text = update.message.text
         if text in ["Next ⏩", "/next"]:
             await send_random_media(update, context, is_prev=False)
@@ -806,6 +853,10 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
     
+    if query.from_user.id != owner_id and await db.is_user_banned(query.from_user.id):
+        await query.answer("❌ You are banned.", show_alert=True)
+        return
+        
     # Allow set_type_, buy_premium, gen_short_link callbacks for all users
     if query.data.startswith("set_type_"):
         await query.answer()

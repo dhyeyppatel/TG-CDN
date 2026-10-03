@@ -236,6 +236,32 @@ class Database:
     async def get_referral_count(self, user_id):
         return await self.referrals.count_documents({"referrer_id": user_id})
 
+    async def add_user(self, user_id, first_name, username):
+        user = await self.users.find_one({"_id": user_id})
+        if not user:
+            await self.users.insert_one({
+                "_id": user_id,
+                "first_name": first_name,
+                "username": username,
+                "joined_at": time.time(),
+                "banned": False
+            })
+            return True
+        return False
+        
+    async def set_user_banned(self, user_id, banned):
+        await self.users.update_one(
+            {"_id": user_id},
+            {"$set": {"banned": banned}},
+            upsert=True
+        )
+        
+    async def is_user_banned(self, user_id):
+        user = await self.users.find_one({"_id": user_id})
+        if user and user.get("banned", False):
+            return True
+        return False
+
 _dbs = {}
 def get_db(bot_id=None):
     if bot_id not in _dbs:

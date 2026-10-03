@@ -1,7 +1,7 @@
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ChatMemberHandler, CallbackQueryHandler, MessageReactionHandler, TypeHandler
 from telegram import Update
 from bot.config import Config
-from bot.handlers import start_handler, channel_post_handler, message_handler, my_chat_member_handler, settings_handler, settings_callback, toggle_autosend, reaction_handler, type_command, send_random_media, help_command, clone_command, premium_command
+from bot.handlers import start_handler, channel_post_handler, message_handler, my_chat_member_handler, settings_handler, settings_callback, toggle_autosend, reaction_handler, type_command, send_random_media, help_command, clone_command, premium_command, ban_command, unban_command
 import logging
 
 logging.basicConfig(
@@ -22,6 +22,8 @@ def create_app(token=None):
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("clone", clone_command))
     app.add_handler(CommandHandler("premium", premium_command))
+    app.add_handler(CommandHandler("ban", ban_command))
+    app.add_handler(CommandHandler("unban", unban_command))
     
     # Settings command for admins
     app.add_handler(CommandHandler("settings", settings_handler))
