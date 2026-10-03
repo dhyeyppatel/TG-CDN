@@ -281,35 +281,51 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"✅ Channel display name set to: **{text}**\n\nThe main menu has been updated.", parse_mode="Markdown", reply_markup=reply_markup)
                 return
 
-    # 1. Handle Channel Forwarding initialization (Admin Only)
-    if update.message and Config.OWNER_ID and update.effective_user.id == Config.OWNER_ID:
-        forwarded_chat = None
-        forwarded_msg_id = None
-        
-        if update.message.forward_origin and getattr(update.message.forward_origin, "type", "") == "channel":
-            forwarded_chat = update.message.forward_origin.chat
-            forwarded_msg_id = update.message.forward_origin.message_id
-        elif update.message.forward_from_chat and update.message.forward_from_chat.type == "channel":
-            forwarded_chat = update.message.forward_from_chat
-            forwarded_msg_id = update.message.forward_from_message_id
+        # Handle wait_fw_ states
+        if state and state.startswith("wait_fw_"):
+            chat_id = None
+            title = "Channel"
+            msg_id = 1
             
-        if forwarded_chat:
-            chat_id = forwarded_chat.id
-            title = forwarded_chat.title
-            msg_id = forwarded_msg_id
-            
-            keyboard = [
-                [InlineKeyboardButton("Add as Storage Channel", callback_data=f"fw_store_{chat_id}_{msg_id}")],
-                [InlineKeyboardButton("Set Early Access Chat", callback_data=f"fw_early_{chat_id}")],
-                [InlineKeyboardButton("Set Archive Channel", callback_data=f"fw_archive_{chat_id}")],
-                [InlineKeyboardButton("Set FSUB Channel", callback_data=f"fw_fsub_{chat_id}")]
-            ]
-            await update.message.reply_text(
-                f"You forwarded a message from **{title}**.\nWhat do you want to do with this chat?",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode="Markdown"
-            )
-            return
+            if update.message.forward_origin and getattr(update.message.forward_origin, "type", "") == "channel":
+                chat_id = update.message.forward_origin.chat.id
+                title = update.message.forward_origin.chat.title
+                msg_id = update.message.forward_origin.message_id
+            elif update.message.forward_from_chat and getattr(update.message.forward_from_chat, "type", "") == "channel":
+                chat_id = update.message.forward_from_chat.id
+                title = update.message.forward_from_chat.title
+                msg_id = update.message.forward_from_message_id
+            elif update.message.text:
+                text = update.message.text.strip()
+                if text.startswith("-100") and text.replace("-", "").isdigit():
+                    chat_id = int(text)
+                    title = "Manual Channel"
+                    
+            if chat_id:
+                if state == "wait_fw_store":
+                    keyboard = [
+                        [InlineKeyboardButton("Add as Storage Channel", callback_data=f"fw_store_{chat_id}_{msg_id}")]
+                    ]
+                    await update.message.reply_text(
+                        f"Target found: **{title}** (`{chat_id}`). Click below to confirm.",
+                        reply_markup=InlineKeyboardMarkup(keyboard),
+                        parse_mode="Markdown"
+                    )
+                elif state == "wait_fw_fsub":
+                    await db.set_setting("fsub_channel_id", chat_id)
+                    await update.message.reply_text(f"✅ FSUB Channel has been set to ID: {chat_id}")
+                    await db.set_setting("admin_state", None)
+                elif state == "wait_fw_early":
+                    await db.set_setting("early_access_chat", chat_id)
+                    await update.message.reply_text(f"✅ Early Access Chat has been set to ID: {chat_id}")
+                    await db.set_setting("admin_state", None)
+                elif state == "wait_fw_archive":
+                    await db.set_setting("archive_channel_id", chat_id)
+                    await update.message.reply_text(f"✅ Archive Channel has been set to ID: {chat_id}")
+                    await db.set_setting("admin_state", None)
+                return
+
+
 
     # 2. Handle standard text buttons
     if update.message and update.message.text:
@@ -395,11 +411,12 @@ async def render_menu_channels(query):
     archive_id = await db.get_setting("archive_channel_id", "Not Set")
     
     keyboard = [
+        [InlineKeyboardButton("➕ Add Storage Channel", callback_data="prompt_fw_store")],
         [InlineKeyboardButton("📊 Storage Channels", callback_data="settings_channels")],
-        [InlineKeyboardButton(f"FSUB Ch: {fsub_id}", callback_data="prompt_fw"), InlineKeyboardButton("❌", callback_data="rm_fsub_id")],
+        [InlineKeyboardButton(f"FSUB Ch: {fsub_id}", callback_data="prompt_fw_fsub"), InlineKeyboardButton("❌", callback_data="rm_fsub_id")],
         [InlineKeyboardButton("Set FSUB Link", callback_data="prompt_fsub_link")],
-        [InlineKeyboardButton(f"Early Access: {early_id}", callback_data="prompt_fw"), InlineKeyboardButton("❌", callback_data="rm_early")],
-        [InlineKeyboardButton(f"Archive Ch: {archive_id}", callback_data="prompt_fw"), InlineKeyboardButton("❌", callback_data="rm_archive")],
+        [InlineKeyboardButton(f"Early Access: {early_id}", callback_data="prompt_fw_early"), InlineKeyboardButton("❌", callback_data="rm_early")],
+        [InlineKeyboardButton(f"Archive Ch: {archive_id}", callback_data="prompt_fw_archive"), InlineKeyboardButton("❌", callback_data="rm_archive")],
         [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
     ]
     await query.edit_message_text("⚙️ *Channels Setup*\n\n_To set a channel, forward a message from it to the bot, and select what type of channel it is. Or click buttons to remove them._", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -509,8 +526,21 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await db.set_setting("fsub_channel_id", chat_id)
         await query.edit_message_text(f"✅ FSUB Channel has been set to ID: {chat_id}")
 
-    elif query.data == "prompt_fw":
-        await query.answer("Please forward a message from the channel to the bot to set it.", show_alert=True)
+    elif query.data.startswith("prompt_fw_"):
+        mode = query.data.replace("prompt_fw_", "")
+        await db.set_setting("admin_state", f"wait_fw_{mode}")
+        keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_state")]]
+        await query.edit_message_text(
+            "Please **forward a message** from the target channel here.\n\n"
+            "*(Or you can just send the chat ID manually, e.g. `-100123...`)*",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+    elif query.data == "cancel_state":
+        await db.set_setting("admin_state", None)
+        await query.answer("Cancelled.", show_alert=False)
+        await render_menu_channels(query)
         
     elif query.data == "prompt_fsub_link":
         await db.set_setting("admin_state", "wait_fsub_link")
