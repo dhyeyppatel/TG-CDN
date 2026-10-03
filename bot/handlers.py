@@ -1,7 +1,7 @@
 import random
 import logging
 import time
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
 from bot.database import get_db
@@ -9,8 +9,11 @@ from bot.config import Config
 
 logger = logging.getLogger(__name__)
 
+# ─── Helpers ───────────────────────────────────────────────
+
 async def get_main_keyboard(bot_id):
-    delivery_mode = await get_db(bot_id).get_setting("delivery_mode", "random")
+    db = get_db(bot_id)
+    delivery_mode = await db.get_setting("delivery_mode", "random")
     keyboard = []
     
     if delivery_mode == "serial":
@@ -21,59 +24,6 @@ async def get_main_keyboard(bot_id):
     keyboard.append([KeyboardButton("⏱ Auto-Send"), KeyboardButton("❓ Help")])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-async def type_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    db = get_db(context.bot.id)
-    channels = await db.get_all_channels()
-    keyboard = []
-    
-    for c in channels:
-        name = c.get('title', 'Unknown Channel')
-        keyboard.append([InlineKeyboardButton(f"📁 {name}", callback_data=f"set_type_{c['chat_id']}")])
-        
-    keyboard.append([InlineKeyboardButton("🎲 All Channels (Mix)", callback_data="set_type_all")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text("Select your preferred media type:", reply_markup=reply_markup)
-
-async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    db = get_db(context.bot.id)
-    
-    # Handle ?start=cdn
-    if context.args and len(context.args) > 0 and context.args[0] == "cdn":
-        clone_mode = await db.get_setting("clone_mode", True)
-        owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
-        if not clone_mode and update.effective_user.id != owner_id:
-            await update.message.reply_text("❌ Clone mode is currently disabled by the owner.")
-            return
-            
-        await update.message.reply_text(
-            "🚀 *Welcome to the Bot Cloner!* 🚀\n\n"
-            "To clone this bot for your own use, follow these steps:\n"
-            "1. Go to @BotFather and create a new bot.\n"
-            "2. Copy the HTTP API Token provided by BotFather.\n"
-            "3. Send it to me in the following format:\n\n"
-            "`/clone YOUR_BOT_TOKEN_HERE`\n\n"
-            "Once cloned, your bot will run autonomously exactly like this one!",
-            parse_mode="Markdown"
-        )
-        return
-        
-    reply_markup = await get_main_keyboard(context.bot.id)
-    bot_info = await context.bot.get_me()
-    
-    welcome_text = (
-        f"✨ *Welcome to {bot_info.first_name}!* ✨\n\n"
-        "Here to serve you the best media seamlessly. 🚀\n\n"
-        "Use the buttons below to browse, or send /type to filter by specific categories."
-    )
-    
-    clone_mode = await db.get_setting("clone_mode", True)
-    if clone_mode:
-        inline_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🤖 Create your own Clone", url=f"https://t.me/{bot_info.username}?start=cdn")]])
-        await update.message.reply_text(welcome_text, reply_markup=inline_kb, parse_mode="Markdown")
-        await update.message.reply_text("👇 Choose an option below:", reply_markup=reply_markup)
-    else:
-        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
 async def check_fsub(bot, user_id):
     db = get_db(bot.id)
     fsub_enabled = await db.get_setting("fsub_enabled", False)
@@ -89,11 +39,13 @@ async def check_fsub(bot, user_id):
     except BadRequest:
         return False
 
+# ─── Core Media Logic ─────────────────────────────────────
+
 async def core_send_media(bot, chat_id, specific_channel_id=None, is_prev=False):
     db = get_db(bot.id)
     channels = await db.get_all_channels()
     if not channels:
-        return False, "No storage channels found yet! Forward a message from your channel to me to register it."
+        return False, "📭 No storage channels found yet! Use /settings to add one."
         
     if specific_channel_id:
         channels = [c for c in channels if c["chat_id"] == specific_channel_id]
@@ -103,7 +55,7 @@ async def core_send_media(bot, chat_id, specific_channel_id=None, is_prev=False)
     autodelete_mins = await db.get_setting("autodelete_minutes", 5)
     autodelete_secs = autodelete_mins * 60
     
-    delivery_mode = await get_db(bot_id).get_setting("delivery_mode", "random")
+    delivery_mode = await db.get_setting("delivery_mode", "random")
 
     for attempt in range(20):
         chosen_channel = random.choice(channels)
@@ -116,26 +68,24 @@ async def core_send_media(bot, chat_id, specific_channel_id=None, is_prev=False)
                 target_id = max(1, target_id - 2)
                 
             if target_id > last_message_id:
-                # User has exhausted this channel, loop back to start
                 await db.update_user_progress(chat_id, c_id, 1)
                 target_id = 1
         else:
             if is_prev:
-                return False, "Previous button is only supported in Serial delivery mode."
+                return False, "⚠️ Previous button is only supported in Serial delivery mode."
             target_id = random.randint(1, last_message_id)
         
         try:
             media_group = await db.get_media_group_by_message_id(c_id, target_id)
             
             if media_group and len(media_group.get("message_ids", [])) > 1:
-                # Copy the entire media group
                 sent_messages = await bot.copy_messages(
                     chat_id=chat_id,
                     from_chat_id=c_id,
                     message_ids=media_group["message_ids"]
                 )
                 
-                reply_markup = await get_main_keyboard(context.bot.id)
+                reply_markup = await get_main_keyboard(bot.id)
                 warning_msg = await bot.send_message(
                     chat_id=chat_id, 
                     text=f"⏳ _This media group will be automatically deleted in {autodelete_mins} minutes._",
@@ -153,7 +103,6 @@ async def core_send_media(bot, chat_id, specific_channel_id=None, is_prev=False)
                     
                 return True, None
             else:
-                # Normal single message copy
                 sent_message = await bot.copy_message(
                     chat_id=chat_id,
                     from_chat_id=c_id,
@@ -161,7 +110,7 @@ async def core_send_media(bot, chat_id, specific_channel_id=None, is_prev=False)
                     reply_markup=None
                 )
                 
-                reply_markup = await get_main_keyboard(context.bot.id)
+                reply_markup = await get_main_keyboard(bot.id)
                 warning_msg = await bot.send_message(
                     chat_id=chat_id, 
                     text=f"⏳ _This file will be automatically deleted in {autodelete_mins} minutes._",
@@ -169,7 +118,6 @@ async def core_send_media(bot, chat_id, specific_channel_id=None, is_prev=False)
                     reply_markup=reply_markup
                 )
                 
-                # Schedule DB auto-delete
                 delete_at = int(time.time()) + autodelete_secs
                 await db.schedule_deletion(chat_id, sent_message.message_id, delete_at)
                 await db.schedule_deletion(chat_id, warning_msg.message_id, delete_at)
@@ -180,19 +128,18 @@ async def core_send_media(bot, chat_id, specific_channel_id=None, is_prev=False)
                 return True, None
         except BadRequest:
             if delivery_mode == "serial":
-                # Message might be deleted in channel, skip it
                 await db.update_user_progress(chat_id, c_id, target_id + 1)
             continue
         except Exception:
             continue
             
-    return False, "Couldn't find a valid post after several attempts. Please try again later!"
+    return False, "😕 Couldn't find a valid post after several attempts. Please try again later!"
 
 async def core_send_early_access_media(bot, chat_id):
     db = get_db(bot.id)
     media_list = await db.get_early_access_media_all()
     if not media_list:
-        return False, "No early access media found yet! React to a message in your Early Access chat to add it."
+        return False, "📭 No early access media found yet! React to a message in your Early Access chat to add it."
 
     autodelete_mins = await db.get_setting("autodelete_minutes", 5)
     autodelete_secs = autodelete_mins * 60
@@ -210,7 +157,7 @@ async def core_send_early_access_media(bot, chat_id):
                 reply_markup=None
             )
             
-            reply_markup = await get_main_keyboard(context.bot.id)
+            reply_markup = await get_main_keyboard(bot.id)
             warning_msg = await bot.send_message(
                 chat_id=chat_id, 
                 text=f"⏳ _This file will be automatically deleted in {autodelete_mins} minutes._",
@@ -218,7 +165,6 @@ async def core_send_early_access_media(bot, chat_id):
                 reply_markup=reply_markup
             )
             
-            # Schedule DB auto-delete
             delete_at = int(time.time()) + autodelete_secs
             await db.schedule_deletion(chat_id, sent_message.message_id, delete_at)
             await db.schedule_deletion(chat_id, warning_msg.message_id, delete_at)
@@ -227,9 +173,69 @@ async def core_send_early_access_media(bot, chat_id):
             await db.remove_early_access_media(c_id, m_id)
             continue
             
-    return False, "Failed to fetch early access media after multiple attempts."
+    return False, "😕 Failed to fetch early access media after multiple attempts."
+
+# ─── User Commands ─────────────────────────────────────────
+
+async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = get_db(context.bot.id)
+    
+    # Handle ?start=cdn deep link
+    if context.args and context.args[0] == "cdn":
+        clone_mode = await db.get_setting("clone_mode", True)
+        owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
+        if not clone_mode and update.effective_user.id != owner_id:
+            await update.message.reply_text("❌ Clone mode is currently disabled by the owner.")
+            return
+            
+        await update.message.reply_text(
+            "🚀 *Welcome to the Bot Cloner!*\n\n"
+            "To clone this bot for your own use:\n\n"
+            "1️⃣ Go to @BotFather and create a new bot\n"
+            "2️⃣ Copy the HTTP API Token\n"
+            "3️⃣ Send it here in this format:\n\n"
+            "`/clone YOUR_BOT_TOKEN_HERE`\n\n"
+            "✨ Once cloned, your bot will run autonomously!",
+            parse_mode="Markdown"
+        )
+        return
+        
+    reply_markup = await get_main_keyboard(context.bot.id)
+    bot_info = await context.bot.get_me()
+    
+    welcome_text = (
+        f"✨ *Welcome to {bot_info.first_name}!* ✨\n\n"
+        "🎬 Your premium media delivery bot.\n"
+        "Browse, discover, and enjoy content seamlessly.\n\n"
+        "📌 Use the buttons below or send /type to filter by category."
+    )
+    
+    clone_mode = await db.get_setting("clone_mode", True)
+    if clone_mode:
+        inline_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🤖 Create your own Clone", url=f"https://t.me/{bot_info.username}?start=cdn")]
+        ])
+        await update.message.reply_text(welcome_text, reply_markup=inline_kb, parse_mode="Markdown")
+        await update.message.reply_text("👇 Choose an option below:", reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+
+async def type_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = get_db(context.bot.id)
+    channels = await db.get_all_channels()
+    keyboard = []
+    
+    for c in channels:
+        name = c.get('title', 'Unknown Channel')
+        keyboard.append([InlineKeyboardButton(f"📁 {name}", callback_data=f"set_type_{c['chat_id']}")])
+        
+    keyboard.append([InlineKeyboardButton("🎲 All Channels (Mix)", callback_data="set_type_all")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text("📂 *Select your preferred media type:*", reply_markup=reply_markup, parse_mode="Markdown")
 
 async def send_random_media(update: Update, context: ContextTypes.DEFAULT_TYPE, is_prev=False):
+    db = get_db(context.bot.id)
     # Check Force Sub
     if not await check_fsub(context.bot, update.effective_user.id):
         fsub_link = await db.get_setting("fsub_channel_link", "")
@@ -253,7 +259,6 @@ async def send_random_media(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     if mode == "early_access":
         success, error_msg = await core_send_early_access_media(context.bot, chat_id)
     else:
-        # Fetch user's preferred channel
         pref = await db.get_preferred_channel(chat_id)
         specific = int(pref) if pref != "all" else None
         success, error_msg = await core_send_media(context.bot, chat_id, specific, is_prev)
@@ -279,155 +284,102 @@ async def toggle_autosend(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if is_subscribed:
         mins = await db.get_setting("autodelete_minutes", 5)
-        await update.message.reply_text(f"✅ Auto-send started! You will receive random media every 5 minutes for the next {expire_mins} minutes. (They will auto-delete {mins} mins after arriving).")
+        await update.message.reply_text(
+            f"✅ *Auto-send started!*\n\n"
+            f"📬 You'll receive media every 5 minutes for the next {expire_mins} minutes.\n"
+            f"🗑 Each file auto-deletes after {mins} minutes.",
+            parse_mode="Markdown"
+        )
     else:
         await update.message.reply_text("🛑 Auto-send stopped.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
+    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
+    
     text = (
         "🤖 *How to use this bot*\n\n"
         "Here are the available features and commands:\n\n"
         "🔹 *Core Features:*\n"
-        "• *Next / Prev*: Request the next (or previous) media file. (Prev only works if the bot is in Serial Mode).\n"
-        "• *Auto-Send*: Automatically receive a new media file every 5 minutes! (Toggle on/off).\n\n"
+        "• *Next / Prev* — Request the next (or previous) media file. Prev only works in Serial mode.\n"
+        "• *Auto-Send* — Automatically receive a new media file every 5 minutes! Toggle on/off.\n\n"
         "🔹 *Commands:*\n"
-        "• /start - Restart the bot and show the main menu.\n"
-        "• /type - Opens a menu allowing you to lock your requests to a specific category (e.g. only 'Memes').\n"
-        "• /next - Request the next media.\n"
-        "• /prev - Request the previous media.\n"
-        "• /autosend - Toggle the Auto-Send feature.\n"
-        "• /help - Show this help message.\n"
+        "• /start — Restart the bot and show the main menu\n"
+        "• /type — Filter by a specific media category\n"
+        "• /next — Request the next media\n"
+        "• /prev — Request the previous media\n"
+        "• /autosend — Toggle the Auto-Send feature\n"
+        "• /help — Show this help message\n"
     )
     
-    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
     if owner_id and update.effective_user.id == owner_id:
         text += (
             "\n👑 *Admin Features:*\n"
-            "• /settings - Open the Admin Control Panel to configure channels, timers, delivery modes, and more.\n"
-            "   - *Storage Channels*: The bot randomly (or serially) pulls media from these channels for the default pool.\n"
-            "   - *Early Access*: Posts sent to this chat are kept in an exclusive pool until they are automatically moved to Archive.\n"
-            "   - *Force Sub*: Require users to join a specific channel before using the bot.\n"
+            "• /settings — Open the Admin Control Panel\n"
+            "   ◦ *Storage Channels* — Bot pulls media from these\n"
+            "   ◦ *Early Access* — Exclusive pool before archival\n"
+            "   ◦ *Force Sub* — Require users to join a channel\n"
+            "   ◦ *Clone Mode* — Allow/disallow users to clone\n"
         )
         
     await update.message.reply_text(text, parse_mode="Markdown")
 
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def clone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
-    # 0. Handle Admin States
+    clone_mode = await db.get_setting("clone_mode", True)
     owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
-    if not owner_id:
+    
+    if not clone_mode and update.effective_user.id != owner_id:
+        await update.message.reply_text("❌ Clone mode is currently disabled by the owner.")
+        return
+
+    text = update.message.text
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        await update.message.reply_text("📋 *Usage:* `/clone YOUR_BOT_TOKEN`", parse_mode="Markdown")
         return
         
-    if update.effective_user.id == owner_id:
-        state = await db.get_setting("admin_state", None)
-        if state and update.message and update.message.text:
-            clone_mode = await db.get_setting("clone_mode", True)
-    if not clone_mode and update.effective_user.id != (await db.get_setting("owner_id", Config.OWNER_ID)):
-        await update.message.reply_text("? Clone mode is currently disabled by the owner.")
+    token = parts[1].strip()
+    try:
+        new_bot = Bot(token)
+        bot_info = await new_bot.get_me()
+    except Exception as e:
+        await update.message.reply_text(f"❌ Invalid token: `{str(e)}`", parse_mode="Markdown")
         return
-
-    text = update.message.text
-            if state == "wait_fsub_link":
-                await db.set_setting("fsub_channel_link", text)
-                await db.set_setting("admin_state", None)
-                await update.message.reply_text(f"✅ FSUB Link updated to: {text}\nSend /settings to view changes.")
-                return
-            elif state == "wait_archive_days":
-                if text.isdigit():
-                    await db.set_setting("archive_days", int(text))
-                    await db.set_setting("admin_state", None)
-                    await update.message.reply_text(f"✅ Archive time updated to {text} days.\nSend /settings to view changes.")
-                else:
-                    await update.message.reply_text("❌ Please send a valid number.")
-                return
-            elif state.startswith("wait_channel_name_"):
-                parts = state.split("_")
-                chat_id = int(parts[3])
-                msg_id = int(parts[4])
-                # Check if it exists
-                channels = await db.get_all_channels()
-                exists = next((c for c in channels if c["chat_id"] == chat_id), None)
-                if exists:
-                    await db.update_channel(chat_id, text, exists["last_message_id"])
-                else:
-                    await db.update_channel(chat_id, text, msg_id)
-                    
-                await db.set_setting("admin_state", None)
-                reply_markup = await get_main_keyboard(context.bot.id)
-                await update.message.reply_text(f"✅ Channel display name set to: **{text}**\n\nThe main menu has been updated.", parse_mode="Markdown", reply_markup=reply_markup)
-                return
-
-        # Handle wait_fw_ states
-        if state and state.startswith("wait_fw_"):
-            chat_id = None
-            title = "Channel"
-            msg_id = 1
-            
-            if update.message.forward_origin and hasattr(update.message.forward_origin, "chat"):
-                chat_id = update.message.forward_origin.chat.id
-                title = update.message.forward_origin.chat.title
-                msg_id = update.message.forward_origin.message_id
-            elif update.message.forward_from_chat:
-                chat_id = update.message.forward_from_chat.id
-                title = update.message.forward_from_chat.title
-                msg_id = update.message.forward_from_message_id
-            elif update.message.text:
-                clone_mode = await db.get_setting("clone_mode", True)
-    if not clone_mode and update.effective_user.id != (await db.get_setting("owner_id", Config.OWNER_ID)):
-        await update.message.reply_text("? Clone mode is currently disabled by the owner.")
+        
+    global_db = get_db()
+    app_domain = await global_db.get_setting("app_domain")
+    if not app_domain:
+        await update.message.reply_text("❌ App domain not configured. The admin needs to set the webhook first.")
         return
+        
+    # Save to bot registry
+    await global_db.bot_registry.update_one(
+        {"bot_id": bot_info.id},
+        {"$set": {"token": token, "owner_id": update.effective_user.id, "username": bot_info.username}},
+        upsert=True
+    )
+    
+    # Configure initial settings for cloned bot
+    cloned_db = get_db(bot_info.id)
+    await cloned_db.set_setting("owner_id", update.effective_user.id)
+    
+    webhook_url = f"{app_domain}/api/webhook/{token}"
+    try:
+        await new_bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=["message", "callback_query", "channel_post", "my_chat_member", "message_reaction", "message_reaction_count"]
+        )
+        await update.message.reply_text(
+            f"✅ *Bot successfully cloned!*\n\n"
+            f"🤖 Your new bot: @{bot_info.username}\n\n"
+            f"Send `/start` to your new bot to get started!",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to set webhook: `{str(e)}`", parse_mode="Markdown")
 
-    text = update.message.text.strip()
-                if text.startswith("-100") and text.replace("-", "").isdigit():
-                    chat_id = int(text)
-                    title = "Manual Channel"
-                    
-            if chat_id:
-                if state == "wait_fw_store":
-                    keyboard = [
-                        [InlineKeyboardButton("Add as Storage Channel", callback_data=f"fw_store_{chat_id}_{msg_id}")]
-                    ]
-                    await update.message.reply_text(
-                        f"Target found: **{title}** (`{chat_id}`). Click below to confirm.",
-                        reply_markup=InlineKeyboardMarkup(keyboard),
-                        parse_mode="Markdown"
-                    )
-                elif state == "wait_fw_fsub":
-                    await db.set_setting("fsub_channel_id", chat_id)
-                    await update.message.reply_text(f"✅ FSUB Channel has been set to ID: {chat_id}")
-                    await db.set_setting("admin_state", None)
-                elif state == "wait_fw_early":
-                    await db.set_setting("early_access_chat", chat_id)
-                    await update.message.reply_text(f"✅ Early Access Chat has been set to ID: {chat_id}")
-                    await db.set_setting("admin_state", None)
-                elif state == "wait_fw_archive":
-                    await db.set_setting("archive_channel_id", chat_id)
-                    await update.message.reply_text(f"✅ Archive Channel has been set to ID: {chat_id}")
-                    await db.set_setting("admin_state", None)
-                return
-            else:
-                await update.message.reply_text("❌ Invalid format. Please forward a valid message from a channel, or type a raw channel ID (e.g., `-1001234567890`).", parse_mode="Markdown")
-                return
-
-
-
-    # 2. Handle standard text buttons
-    if update.message and update.message.text:
-        clone_mode = await db.get_setting("clone_mode", True)
-    if not clone_mode and update.effective_user.id != (await db.get_setting("owner_id", Config.OWNER_ID)):
-        await update.message.reply_text("? Clone mode is currently disabled by the owner.")
-        return
-
-    text = update.message.text
-        if text in ["Next ⏩", "/next"]:
-            await send_random_media(update, context, is_prev=False)
-        elif text in ["Prev ⏪", "/prev"]:
-            await send_random_media(update, context, is_prev=True)
-        elif text == "⏱ Auto-Send":
-            await toggle_autosend(update, context)
-        elif text in ["❓ Help", "/help"]:
-            await help_command(update, context)
+# ─── Channel & Reaction Handlers ──────────────────────────
 
 async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
@@ -435,12 +387,12 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if not message:
         return
         
-    # Ignore posts in the archive channel (do not add them to the Default Pool)
+    # Ignore posts in the archive channel
     archive_id = await db.get_setting("archive_channel_id", "")
     if archive_id and message.chat.id == int(archive_id):
         return
         
-    # Any post in any channel dynamically registers/updates its last_message_id
+    # Dynamically register/update channel
     await db.update_channel(message.chat.id, message.chat.title, message.message_id)
     
     if message.media_group_id:
@@ -463,7 +415,6 @@ async def reaction_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     early_chat = await db.get_setting("early_access_chat", None)
     
-    # If the reaction happened in the Early Access chat
     if early_chat and chat_id == int(early_chat):
         if is_add:
             await db.add_early_access_media(chat_id, msg_id)
@@ -474,32 +425,136 @@ async def reaction_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
-    # This fires when the bot is added or removed from a chat
     result = update.my_chat_member
     
     if result.chat.type == "channel":
         new_status = result.new_chat_member.status
         if new_status in ["left", "kicked"]:
-            # Removed from channel, stop tracking it
             await db.remove_channel(result.chat.id)
             logger.info(f"Bot removed from channel: {result.chat.id}, deleted from database.")
 
-async def render_settings_main(query):
-    db = get_db(query.message.get_bot().id)
+# ─── Message Handler (Admin States + Buttons) ─────────────
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = get_db(context.bot.id)
+    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
+    
+    if not owner_id:
+        return
+
+    # Handle Admin States
+    if update.effective_user.id == owner_id:
+        state = await db.get_setting("admin_state", None)
+        
+        # Text-based admin states
+        if state and update.message and update.message.text:
+            text = update.message.text
+            if state == "wait_fsub_link":
+                await db.set_setting("fsub_channel_link", text)
+                await db.set_setting("admin_state", None)
+                await update.message.reply_text(f"✅ FSUB Link updated to: {text}\nSend /settings to view changes.")
+                return
+            elif state == "wait_archive_days":
+                if text.isdigit():
+                    await db.set_setting("archive_days", int(text))
+                    await db.set_setting("admin_state", None)
+                    await update.message.reply_text(f"✅ Archive time updated to {text} days.\nSend /settings to view changes.")
+                else:
+                    await update.message.reply_text("❌ Please send a valid number.")
+                return
+            elif state.startswith("wait_channel_name_"):
+                parts = state.split("_")
+                chat_id = int(parts[3])
+                msg_id = int(parts[4])
+                channels = await db.get_all_channels()
+                exists = next((c for c in channels if c["chat_id"] == chat_id), None)
+                if exists:
+                    await db.update_channel(chat_id, text, exists["last_message_id"])
+                else:
+                    await db.update_channel(chat_id, text, msg_id)
+                    
+                await db.set_setting("admin_state", None)
+                reply_markup = await get_main_keyboard(context.bot.id)
+                await update.message.reply_text(f"✅ Channel display name set to: **{text}**\n\nThe main menu has been updated.", parse_mode="Markdown", reply_markup=reply_markup)
+                return
+
+        # Forward/ID-based admin states (wait_fw_*)
+        if state and state.startswith("wait_fw_"):
+            chat_id = None
+            title = "Channel"
+            msg_id = 1
+            
+            if update.message.forward_origin and hasattr(update.message.forward_origin, "chat"):
+                chat_id = update.message.forward_origin.chat.id
+                title = update.message.forward_origin.chat.title
+                msg_id = update.message.forward_origin.message_id
+            elif update.message.forward_from_chat:
+                chat_id = update.message.forward_from_chat.id
+                title = update.message.forward_from_chat.title
+                msg_id = update.message.forward_from_message_id
+            elif update.message.text:
+                text = update.message.text.strip()
+                if text.startswith("-100") and text.replace("-", "").isdigit():
+                    chat_id = int(text)
+                    title = "Manual Channel"
+                    
+            if chat_id:
+                if state == "wait_fw_store":
+                    keyboard = [
+                        [InlineKeyboardButton("✅ Add as Storage Channel", callback_data=f"fw_store_{chat_id}_{msg_id}")]
+                    ]
+                    await update.message.reply_text(
+                        f"📡 Target found: **{title}** (`{chat_id}`). Click below to confirm.",
+                        reply_markup=InlineKeyboardMarkup(keyboard),
+                        parse_mode="Markdown"
+                    )
+                elif state == "wait_fw_fsub":
+                    await db.set_setting("fsub_channel_id", chat_id)
+                    await update.message.reply_text(f"✅ FSUB Channel has been set to ID: `{chat_id}`", parse_mode="Markdown")
+                    await db.set_setting("admin_state", None)
+                elif state == "wait_fw_early":
+                    await db.set_setting("early_access_chat", chat_id)
+                    await update.message.reply_text(f"✅ Early Access Chat has been set to ID: `{chat_id}`", parse_mode="Markdown")
+                    await db.set_setting("admin_state", None)
+                elif state == "wait_fw_archive":
+                    await db.set_setting("archive_channel_id", chat_id)
+                    await update.message.reply_text(f"✅ Archive Channel has been set to ID: `{chat_id}`", parse_mode="Markdown")
+                    await db.set_setting("admin_state", None)
+                return
+            else:
+                await update.message.reply_text("❌ Invalid format. Please forward a valid message from a channel, or type a raw channel ID (e.g., `-1001234567890`).", parse_mode="Markdown")
+                return
+
+    # Handle standard text buttons (all users)
+    if update.message and update.message.text:
+        text = update.message.text
+        if text in ["Next ⏩", "/next"]:
+            await send_random_media(update, context, is_prev=False)
+        elif text in ["Prev ⏪", "/prev"]:
+            await send_random_media(update, context, is_prev=True)
+        elif text == "⏱ Auto-Send":
+            await toggle_autosend(update, context)
+        elif text in ["❓ Help", "/help"]:
+            await help_command(update, context)
+
+# ─── Settings UI ───────────────────────────────────────────
+
+async def render_settings_main(target):
+    bot = target.get_bot() if hasattr(target, 'get_bot') else target.message.get_bot()
+    db = get_db(bot.id)
     keyboard = [
-        [InlineKeyboardButton("⚙️ Channels Setup", callback_data="menu_channels")],
-        [InlineKeyboardButton("⚙️ Timers & Limits", callback_data="menu_timers")],
-        [InlineKeyboardButton("⚙️ Toggles", callback_data="menu_toggles")],
-        [InlineKeyboardButton("🔄 Refresh DB Stats", callback_data="settings_stats")]
+        [InlineKeyboardButton("📡 Channels Setup", callback_data="menu_channels")],
+        [InlineKeyboardButton("⏱ Timers & Limits", callback_data="menu_timers")],
+        [InlineKeyboardButton("🔀 Toggles", callback_data="menu_toggles")],
+        [InlineKeyboardButton("📈 DB Stats", callback_data="settings_stats")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    text = "⚙️ *Bot Settings & Admin Panel*\n\nSelect a category below:"
     
-    text = "⚙️ *Bot Settings & Admin Panel*\nSelect a category below:"
-    
-    if hasattr(query, 'edit_message_text'):
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    if hasattr(target, 'edit_message_text'):
+        await target.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
     else:
-        await query.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        await target.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
 async def render_menu_channels(query):
     db = get_db(query.message.get_bot().id)
@@ -511,12 +566,12 @@ async def render_menu_channels(query):
         [InlineKeyboardButton("➕ Add Storage Channel", callback_data="prompt_fw_store")],
         [InlineKeyboardButton("📊 Storage Channels", callback_data="settings_channels")],
         [InlineKeyboardButton(f"FSUB Ch: {fsub_id}", callback_data="prompt_fw_fsub"), InlineKeyboardButton("❌", callback_data="rm_fsub_id")],
-        [InlineKeyboardButton("Set FSUB Link", callback_data="prompt_fsub_link")],
+        [InlineKeyboardButton("🔗 Set FSUB Link", callback_data="prompt_fsub_link")],
         [InlineKeyboardButton(f"Early Access: {early_id}", callback_data="prompt_fw_early"), InlineKeyboardButton("❌", callback_data="rm_early")],
         [InlineKeyboardButton(f"Archive Ch: {archive_id}", callback_data="prompt_fw_archive"), InlineKeyboardButton("❌", callback_data="rm_archive")],
         [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
     ]
-    await query.edit_message_text("⚙️ *Channels Setup*\n\n_To set a channel, forward a message from it to the bot, and select what type of channel it is. Or click buttons to remove them._", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await query.edit_message_text("⚙️ *Channels Setup*\n\n_Click a button to set a channel, or forward a message after clicking._", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def render_menu_timers(query):
     db = get_db(query.message.get_bot().id)
@@ -525,9 +580,9 @@ async def render_menu_timers(query):
     archive_days = await db.get_setting("archive_days", 3)
     
     keyboard = [
-        [InlineKeyboardButton(f"Auto-Delete: {del_mins}m", callback_data="settings_autodelete")],
-        [InlineKeyboardButton(f"Auto-Send Expiry: {exp_mins}m", callback_data="settings_autoexpire")],
-        [InlineKeyboardButton(f"Archive EA Time: {archive_days} Days", callback_data="prompt_archive_days")],
+        [InlineKeyboardButton(f"🗑 Auto-Delete: {del_mins}m", callback_data="settings_autodelete")],
+        [InlineKeyboardButton(f"📬 Auto-Send Expiry: {exp_mins}m", callback_data="settings_autoexpire")],
+        [InlineKeyboardButton(f"📦 Archive EA Time: {archive_days} Days", callback_data="prompt_archive_days")],
         [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
     ]
     await query.edit_message_text("⚙️ *Timers & Limits*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -536,20 +591,23 @@ async def render_menu_toggles(query):
     db = get_db(query.message.get_bot().id)
     fsub = await db.get_setting("fsub_enabled", False)
     mode = await db.get_setting("bot_mode", "default")
-    delivery = await get_db(bot_id).get_setting("delivery_mode", "random")
+    delivery = await db.get_setting("delivery_mode", "random")
+    clone_mode = await db.get_setting("clone_mode", True)
     
     keyboard = [
         [InlineKeyboardButton(f"Delivery: {'🔀 Random' if delivery == 'random' else '🔢 Serial'}", callback_data="toggle_delivery")],
         [InlineKeyboardButton(f"Force Sub: {'🟢 ON' if fsub else '🔴 OFF'}", callback_data="toggle_fsub")],
         [InlineKeyboardButton(f"Mode: {'🟠 Early Access' if mode == 'early_access' else '🟢 Default'}", callback_data="toggle_mode")],
+        [InlineKeyboardButton(f"Clone Mode: {'🟢 ON' if clone_mode else '🔴 OFF'}", callback_data="toggle_clone_mode")],
         [InlineKeyboardButton("🔙 Back", callback_data="settings_main")]
     ]
     await query.edit_message_text("⚙️ *Toggles*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
+    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
     if not owner_id or update.effective_user.id != owner_id:
-        await update.message.reply_text("You are not authorized to use this command.")
+        await update.message.reply_text("🔒 You are not authorized to use this command.")
         return
         
     await render_settings_main(update)
@@ -557,8 +615,25 @@ async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
     query = update.callback_query
+    owner_id = await db.get_setting("owner_id", Config.OWNER_ID)
+    
+    # Allow set_type_ callbacks for all users
+    if query.data.startswith("set_type_"):
+        await query.answer()
+        chat_id_str = query.data.replace("set_type_", "")
+        await db.set_preferred_channel(query.from_user.id, chat_id_str)
+        if chat_id_str == "all":
+            await query.edit_message_text("✅ Media type set to: **All Channels (Mix)**", parse_mode="Markdown")
+        else:
+            channels = await db.get_all_channels()
+            target = next((c for c in channels if c["chat_id"] == int(chat_id_str)), None)
+            name = target["title"] if target else "Specific Channel"
+            await query.edit_message_text(f"✅ Media type set to: **{name}**", parse_mode="Markdown")
+        return
+    
+    # All other callbacks require owner
     if not owner_id or query.from_user.id != owner_id:
-        await query.answer("Unauthorized.", show_alert=True)
+        await query.answer("🔒 Unauthorized.", show_alert=True)
         return
         
     await query.answer()
@@ -573,16 +648,14 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await render_menu_toggles(query)
         
     elif query.data == "toggle_delivery":
-        delivery = await get_db(bot_id).get_setting("delivery_mode", "random")
+        delivery = await db.get_setting("delivery_mode", "random")
         new_del = "serial" if delivery == "random" else "random"
         await db.set_setting("delivery_mode", new_del)
-        await query.answer(f"Delivery mode changed to {new_del.title()}!", show_alert=False)
         await render_menu_toggles(query)
         
     elif query.data == "toggle_fsub":
         fsub = await db.get_setting("fsub_enabled", False)
         await db.set_setting("fsub_enabled", not fsub)
-        await query.answer("Force sub toggled!", show_alert=False)
         await render_menu_toggles(query)
         
     elif query.data == "toggle_clone_mode":
@@ -594,58 +667,42 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode = await db.get_setting("bot_mode", "default")
         new_mode = "early_access" if mode == "default" else "default"
         await db.set_setting("bot_mode", new_mode)
-        await query.answer(f"Mode changed to {new_mode.replace('_', ' ').title()}!", show_alert=False)
         await render_menu_toggles(query)
         
     elif query.data.startswith("fw_store_"):
         parts = query.data.split("_")
         chat_id, msg_id = int(parts[2]), int(parts[3])
-        
-        # Prompt for channel name
         await db.set_setting("admin_state", f"wait_channel_name_{chat_id}_{msg_id}")
-        await query.edit_message_text(f"✅ Preparing to add Storage Channel (ID: {chat_id}).\n\nPlease send the custom Display Name you want to use for this channel (e.g. 'Memes', 'Movie Edits'):")
+        await query.edit_message_text(f"✅ Preparing to add Storage Channel (ID: `{chat_id}`).\n\nPlease send the custom Display Name (e.g. 'Memes', 'Movie Edits'):", parse_mode="Markdown")
         
     elif query.data.startswith("fw_early_"):
         chat_id = int(query.data.split("_")[2])
         await db.set_setting("early_access_chat", chat_id)
-        await query.edit_message_text(f"✅ Early Access Chat has been set to ID: {chat_id}")
-
-    elif query.data.startswith("set_type_"):
-        chat_id_str = query.data.replace("set_type_", "")
-        await db.set_preferred_channel(query.from_user.id, chat_id_str)
-        if chat_id_str == "all":
-            await query.edit_message_text("✅ Media type set to: **All Channels (Mix)**", parse_mode="Markdown")
-        else:
-            # Find name
-            channels = await db.get_all_channels()
-            target = next((c for c in channels if c["chat_id"] == int(chat_id_str)), None)
-            name = target["title"] if target else "Specific Channel"
-            await query.edit_message_text(f"✅ Media type set to: **{name}**", parse_mode="Markdown")
+        await query.edit_message_text(f"✅ Early Access Chat has been set to ID: `{chat_id}`", parse_mode="Markdown")
 
     elif query.data.startswith("fw_archive_"):
         chat_id = int(query.data.split("_")[2])
         await db.set_setting("archive_channel_id", chat_id)
-        await query.edit_message_text(f"✅ Archive Channel has been set to ID: {chat_id}")
+        await query.edit_message_text(f"✅ Archive Channel has been set to ID: `{chat_id}`", parse_mode="Markdown")
 
     elif query.data.startswith("fw_fsub_"):
         chat_id = int(query.data.split("_")[2])
         await db.set_setting("fsub_channel_id", chat_id)
-        await query.edit_message_text(f"✅ FSUB Channel has been set to ID: {chat_id}")
+        await query.edit_message_text(f"✅ FSUB Channel has been set to ID: `{chat_id}`", parse_mode="Markdown")
 
     elif query.data.startswith("prompt_fw_"):
         mode = query.data.replace("prompt_fw_", "")
         await db.set_setting("admin_state", f"wait_fw_{mode}")
         keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_state")]]
         await query.edit_message_text(
-            "Please **forward a message** from the target channel here.\n\n"
-            "*(Or you can just send the chat ID manually, e.g. `-100123...`)*",
+            "📨 Please **forward a message** from the target channel here.\n\n"
+            "_(Or type the chat ID manually, e.g. `-100123...`)_",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
     elif query.data == "cancel_state":
         await db.set_setting("admin_state", None)
-        await query.answer("Cancelled.", show_alert=False)
         await render_menu_channels(query)
         
     elif query.data == "prompt_fsub_link":
@@ -675,7 +732,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         channels = await db.get_all_channels()
         keyboard = []
         if not channels:
-            text = "No active storage channels are currently tracked."
+            text = "📭 No active storage channels are currently tracked."
         else:
             text = "📡 *Tracked Storage Channels:*\n\n"
             for c in channels:
@@ -693,16 +750,15 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = int(query.data.split("_")[2])
         await db.remove_channel(chat_id)
         
-        # update main keyboard in case they deleted the only channel
         reply_markup_main = await get_main_keyboard(context.bot.id)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=f"🗑 Storage Channel (ID: {chat_id}) has been removed.\nMain menu updated.",
-            reply_markup=reply_markup_main
+            text=f"🗑 Storage Channel (ID: `{chat_id}`) has been removed.",
+            reply_markup=reply_markup_main,
+            parse_mode="Markdown"
         )
         
         await query.answer("Storage channel removed!", show_alert=False)
-        # re-render list
         query.data = "settings_channels"
         await settings_callback(update, context)
         
@@ -713,9 +769,9 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         text = (
             "📈 *Database Statistics*\n\n"
-            f"Total Tracked Channels: {total_channels}\n"
-            f"Approximate Total Posts: ~{total_posts_approx}\n"
-            "_(Note: This includes deleted messages and gaps)_"
+            f"📡 Total Tracked Channels: {total_channels}\n"
+            f"📝 Approximate Total Posts: ~{total_posts_approx}\n"
+            "_(Note: Includes deleted messages and gaps)_"
         )
         keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="settings_main")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -725,7 +781,6 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if query.data.startswith("set_del_"):
             mins = int(query.data.split("_")[2])
             await db.set_setting("autodelete_minutes", mins)
-            await query.answer(f"Auto-delete time set to {mins} minutes!", show_alert=False)
             
         current_time = await db.get_setting("autodelete_minutes", 5)
         text = f"⏱ *Auto-Delete Configuration*\n\nCurrent time: **{current_time} minutes**\n\nSelect a new duration:"
@@ -745,10 +800,9 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if query.data.startswith("set_exp_"):
             mins = int(query.data.split("_")[2])
             await db.set_setting("autosend_expire_minutes", mins)
-            await query.answer(f"Auto-Send expiry set to {mins} minutes!", show_alert=False)
             
         current_time = await db.get_setting("autosend_expire_minutes", 60)
-        text = f"⏳ *Auto-Send Expiry Configuration*\n\nCurrent duration: **{current_time} minutes**\n\nSelect a new duration for auto-send subscriptions:"
+        text = f"⏳ *Auto-Send Expiry Configuration*\n\nCurrent duration: **{current_time} minutes**\n\nSelect a new duration:"
         
         keyboard = [
             [InlineKeyboardButton("5 Mins", callback_data="set_exp_5"),
@@ -761,52 +815,3 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
-from telegram import Bot
-
-async def clone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    db = get_db(context.bot.id)
-    clone_mode = await db.get_setting("clone_mode", True)
-    if not clone_mode and update.effective_user.id != (await db.get_setting("owner_id", Config.OWNER_ID)):
-        await update.message.reply_text("? Clone mode is currently disabled by the owner.")
-        return
-
-    text = update.message.text
-    parts = text.split(maxsplit=1)
-    if len(parts) < 2:
-        await update.message.reply_text("Usage: /clone <bot_token>", parse_mode="Markdown")
-        return
-        
-    token = parts[1].strip()
-    try:
-        new_bot = Bot(token)
-        bot_info = await new_bot.get_me()
-    except Exception as e:
-        await update.message.reply_text(f"? Invalid token: {str(e)}")
-        return
-        
-    global_db = get_db()
-    app_domain = await global_db.get_setting("app_domain")
-    if not app_domain:
-        await update.message.reply_text("? App domain not configured. Please set the webhook using /api/set_webhook?url=... first.")
-        return
-        
-    # Save to bot registry
-    await global_db.bot_registry.update_one(
-        {"bot_id": bot_info.id},
-        {"$set": {"token": token, "owner_id": update.effective_user.id, "username": bot_info.username}},
-        upsert=True
-    )
-    
-    # Configure initial settings for cloned bot
-    cloned_db = get_db(bot_info.id)
-    await cloned_db.set_setting("owner_id", update.effective_user.id)
-    
-    webhook_url = f"{app_domain}/api/webhook/{token}"
-    try:
-        await new_bot.set_webhook(
-            url=webhook_url,
-            allowed_updates=["message", "callback_query", "channel_post", "my_chat_member", "message_reaction", "message_reaction_count"]
-        )
-        await update.message.reply_text(f"? Bot successfully cloned!\nYour new bot is @{bot_info.username}\n\nStart using it by sending /start there!")
-    except Exception as e:
-        await update.message.reply_text(f"? Failed to set webhook for the cloned bot: {str(e)}")
