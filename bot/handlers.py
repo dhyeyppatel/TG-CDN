@@ -18,7 +18,7 @@ async def get_main_keyboard():
     else:
         keyboard.append([KeyboardButton("Next ⏩")])
         
-    keyboard.append([KeyboardButton("⏱ Auto-Send")])
+    keyboard.append([KeyboardButton("⏱ Auto-Send"), KeyboardButton("❓ Help")])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 async def type_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -245,6 +245,33 @@ async def toggle_autosend(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("🛑 Auto-send stopped.")
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🤖 *How to use this bot*\n\n"
+        "Here are the available features and commands:\n\n"
+        "🔹 *Core Features:*\n"
+        "• *Next / Prev*: Request the next (or previous) media file. (Prev only works if the bot is in Serial Mode).\n"
+        "• *Auto-Send*: Automatically receive a new media file every 5 minutes! (Toggle on/off).\n\n"
+        "🔹 *Commands:*\n"
+        "• /start - Restart the bot and show the main menu.\n"
+        "• /type - Opens a menu allowing you to lock your requests to a specific category (e.g. only 'Memes').\n"
+        "• /next - Request the next media.\n"
+        "• /prev - Request the previous media.\n"
+        "• /autosend - Toggle the Auto-Send feature.\n"
+        "• /help - Show this help message.\n"
+    )
+    
+    if Config.OWNER_ID and update.effective_user.id == Config.OWNER_ID:
+        text += (
+            "\n👑 *Admin Features:*\n"
+            "• /settings - Open the Admin Control Panel to configure channels, timers, delivery modes, and more.\n"
+            "   - *Storage Channels*: The bot randomly (or serially) pulls media from these channels for the default pool.\n"
+            "   - *Early Access*: Posts sent to this chat are kept in an exclusive pool until they are automatically moved to Archive.\n"
+            "   - *Force Sub*: Require users to join a specific channel before using the bot.\n"
+        )
+        
+    await update.message.reply_text(text, parse_mode="Markdown")
+
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 0. Handle Admin States
     if not Config.OWNER_ID:
@@ -342,6 +369,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_random_media(update, context, is_prev=True)
         elif text == "⏱ Auto-Send":
             await toggle_autosend(update, context)
+        elif text in ["❓ Help", "/help"]:
+            await help_command(update, context)
 
 async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.channel_post
