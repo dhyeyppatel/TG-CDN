@@ -207,9 +207,12 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Handle deep links
+    trigger_next = False
     if context.args:
         arg = context.args[0]
-        if arg == "cdn":
+        if arg == "next":
+            trigger_next = True
+        elif arg == "cdn":
             clone_mode = await db.get_setting("clone_mode", True)
             is_admin = await db.is_admin(update.effective_user.id)
             if not clone_mode and not is_admin:
@@ -274,6 +277,9 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(welcome_text, reply_markup=inline_kb, parse_mode="Markdown")
     await update.message.reply_text("👇 Choose an option below:", reply_markup=reply_markup)
+    
+    if trigger_next:
+        await send_random_media(update, context, is_prev=False)
 
 async def type_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = get_db(context.bot.id)
