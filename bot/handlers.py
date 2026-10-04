@@ -253,10 +253,18 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = await get_main_keyboard(context.bot.id)
     bot_info = await context.bot.get_me()
     
+    ref_link = f"https://t.me/{bot_info.username}?start=ref_{update.effective_user.id}"
+    encoded_ref_link = urllib.parse.quote(ref_link)
+    encoded_text = urllib.parse.quote("Check this bot and enjoy using it!!")
+    share_url = f"https://t.me/share/url?url={encoded_ref_link}&text={encoded_text}"
+    
     welcome_text = (
         f"✨ *Welcome to {bot_info.first_name}!* ✨\n\n"
         "🎬 Your premium media delivery bot.\n"
         "Browse, discover, and enjoy content seamlessly.\n\n"
+        "🔗 *Your Referral Link:*\n"
+        f"`{ref_link}`\n\n"
+        f"🗣 [Share with Friends]({share_url})\n\n"
         "📌 Use the buttons below or send /type to filter by category."
     )
     
